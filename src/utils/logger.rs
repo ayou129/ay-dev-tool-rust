@@ -1,8 +1,8 @@
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use chrono::{DateTime, Local};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogLevel {
@@ -32,8 +32,6 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
-
-
     pub fn format_for_file(&self) -> String {
         format!(
             "[{}] [{}] [{}] {}",
@@ -64,7 +62,7 @@ impl Logger {
         let log_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("ay-dev-tool-rust");
-        
+
         if !log_dir.exists() {
             let _ = std::fs::create_dir_all(&log_dir);
         }
@@ -75,11 +73,9 @@ impl Logger {
             log_file_path: Some(log_file),
             console_enabled: true,
             file_enabled: true,
-            min_level: LogLevel::Info,
+            min_level: LogLevel::Debug, // 改为Debug级别以查看更多日志
         }
     }
-
-
 
     fn should_log(&self, level: &LogLevel) -> bool {
         match (&self.min_level, level) {
@@ -118,11 +114,7 @@ impl Logger {
         // 输出到文件
         if self.file_enabled {
             if let Some(ref log_path) = self.log_file_path {
-                if let Ok(mut file) = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(log_path)
-                {
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
                     writeln!(file, "{}", entry.format_for_file()).ok();
                 }
             }
@@ -147,15 +139,15 @@ impl Logger {
 }
 
 // 全局日志实例
-use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 static GLOBAL_LOGGER: OnceLock<Arc<Mutex<Logger>>> = OnceLock::new();
 
 pub fn init_logger() -> Arc<Mutex<Logger>> {
-    GLOBAL_LOGGER.get_or_init(|| {
-        Arc::new(Mutex::new(Logger::new()))
-    }).clone()
+    GLOBAL_LOGGER
+        .get_or_init(|| Arc::new(Mutex::new(Logger::new())))
+        .clone()
 }
 
 pub fn get_logger() -> Arc<Mutex<Logger>> {
@@ -203,19 +195,31 @@ pub fn log_ssh_connection_success(host: &str, port: u16, username: &str) {
 
 pub fn log_ssh_connection_failed(host: &str, port: u16, username: &str, error: &str) {
     if let Ok(logger) = get_logger().lock() {
-        logger.error("SSH", &format!("连接失败 {}@{}:{} - {}", username, host, port, error));
+        logger.error(
+            "SSH",
+            &format!("连接失败 {}@{}:{} - {}", username, host, port, error),
+        );
     }
 }
 
 pub fn log_ssh_command_execution(command: &str, connection: &str) {
     if let Ok(logger) = get_logger().lock() {
-        logger.info("SSH", &format!("执行命令 '{}' 在连接 '{}'", command, connection));
+        logger.info(
+            "SSH",
+            &format!("执行命令 '{}' 在连接 '{}'", command, connection),
+        );
     }
 }
 
 pub fn log_ssh_command_success(command: &str, _connection: &str, output_length: usize) {
     if let Ok(logger) = get_logger().lock() {
-        logger.info("SSH", &format!("命令 '{}' 执行成功，输出长度: {} 字符", command, output_length));
+        logger.info(
+            "SSH",
+            &format!(
+                "命令 '{}' 执行成功，输出长度: {} 字符",
+                command, output_length
+            ),
+        );
     }
 }
 
@@ -233,21 +237,9 @@ pub fn log_ssh_disconnection(connection: &str, reason: &str) {
 
 pub fn log_ssh_authentication_method(username: &str, auth_type: &str) {
     if let Ok(logger) = get_logger().lock() {
-        logger.debug("SSH", &format!("用户 '{}' 使用 '{}' 认证方式", username, auth_type));
-    }
-}
-
-// ANSI 转义序列处理日志
-pub fn log_ansi_processing(original_length: usize, cleaned_length: usize, ansi_count: usize) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.debug("ANSI", &format!("处理ANSI序列: 原始长度 {}, 清理后长度 {}, 发现 {} 个转义序列", 
-                     original_length, cleaned_length, ansi_count));
-    }
-}
-
-pub fn log_prompt_extraction(original_text: &str, extracted_prompt: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.info("ANSI", &format!("提取提示符: '{}' -> '{}'", 
-                    original_text.replace('\n', "\\n"), extracted_prompt));
+        logger.debug(
+            "SSH",
+            &format!("用户 '{}' 使用 '{}' 认证方式", username, auth_type),
+        );
     }
 }

@@ -61,14 +61,11 @@ fn setup_custom_fonts(ctx: &egui::Context) {
 fn main() -> eframe::Result<()> {
     // 初始化环境日志
     env_logger::init();
-    
+
     // 初始化全局应用日志系统
     let logger = utils::logger::init_logger();
-    logger
-        .lock()
-        .unwrap()
-        .info("App", "应用程序启动");
-    
+    logger.lock().unwrap().info("App", "应用程序启动");
+
     // 记录日志文件路径
     if let Ok(log_instance) = logger.lock() {
         if let Some(log_path) = &log_instance.log_file_path {

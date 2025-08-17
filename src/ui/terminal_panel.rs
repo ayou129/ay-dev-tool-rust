@@ -1,14 +1,13 @@
 use crate::ssh::SshManager;
-use crate::utils::logger::{log_ansi_processing, log_prompt_extraction};
+
 use eframe::egui;
 use egui_phosphor::regular;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-use vt100::Parser;
+use vt100;
 
-#[derive(Debug)]
 pub struct TerminalPanel {
     pub title: String,
     pub connection_info: String,
@@ -20,7 +19,27 @@ pub struct TerminalPanel {
     pub tab_id: Option<String>,
     command_receiver: Option<mpsc::UnboundedReceiver<CommandResult>>,
     command_sender: Option<mpsc::UnboundedSender<CommandResult>>,
-    current_prompt: String,  // 当前提示符，如 "(base) ➜  ~"
+    current_prompt: String, // 当前提示符，如 "(base) ➜  ~"
+    ssh_command_executor:
+        Option<Box<dyn Fn(&str, &str, mpsc::UnboundedSender<CommandResult>) + Send + Sync>>, // SSH命令执行回调
+}
+
+// 手动实现Debug trait，因为Parser不实现Debug
+impl std::fmt::Debug for TerminalPanel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalPanel")
+            .field("title", &self.title)
+            .field("connection_info", &self.connection_info)
+            .field("output_buffer", &self.output_buffer)
+            .field("input_buffer", &self.input_buffer)
+            .field("scroll_to_bottom", &self.scroll_to_bottom)
+            .field("is_connected", &self.is_connected)
+            .field("ssh_manager", &self.ssh_manager)
+            .field("tab_id", &self.tab_id)
+            .field("current_prompt", &self.current_prompt)
+            .field("ssh_command_executor", &"Function(hidden)") // 隐藏函数的内部细节
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +66,14 @@ impl Clone for TerminalPanel {
             command_receiver: Some(receiver),
             command_sender: Some(sender),
             current_prompt: self.current_prompt.clone(),
+            ssh_command_executor: None, // 克隆时不复制函数
         }
     }
 }
 
 impl TerminalPanel {
     pub fn new(title: String, connection_info: String) -> Self {
-        let mut output_buffer = VecDeque::new();
-        output_buffer.push_back(format!("等待连接到 {}...", connection_info));
+        let output_buffer = VecDeque::new();
 
         let (sender, receiver) = mpsc::unbounded_channel();
 
@@ -69,14 +88,23 @@ impl TerminalPanel {
             tab_id: None,
             command_receiver: Some(receiver),
             command_sender: Some(sender),
-            current_prompt: "❯".to_string(),  // 默认提示符
+            current_prompt: "❯".to_string(), // 默认提示符
+            ssh_command_executor: None,      // 初始化时为空，稍后设置
         }
     }
 
     // 设置SSH管理器和tab_id（点击连接时立即调用）
     pub fn set_ssh_manager(&mut self, ssh_manager: Arc<Mutex<SshManager>>, tab_id: String) {
         self.ssh_manager = Some(ssh_manager);
-        self.tab_id = Some(tab_id);  // 立即设置tab_id，用于区分展示方式
+        self.tab_id = Some(tab_id); // 立即设置tab_id，用于区分展示方式
+    }
+
+    // 设置SSH命令执行器
+    pub fn set_ssh_command_executor<F>(&mut self, executor: F)
+    where
+        F: Fn(&str, &str, mpsc::UnboundedSender<CommandResult>) + Send + Sync + 'static,
+    {
+        self.ssh_command_executor = Some(Box::new(executor));
     }
 
     pub fn get_command_sender(&self) -> Option<mpsc::UnboundedSender<CommandResult>> {
@@ -95,10 +123,7 @@ impl TerminalPanel {
     }
 
     pub fn add_output(&mut self, text: String) {
-        self.output_buffer.push_back(text.clone());
-
-        // 尝试从输出中提取提示符
-        self.extract_prompt_from_output(&text);
+        self.output_buffer.push_back(text);
 
         // 限制缓冲区大小
         while self.output_buffer.len() > 10000 {
@@ -108,112 +133,26 @@ impl TerminalPanel {
         self.scroll_to_bottom = true;
     }
 
-    // 从输出中提取提示符
-    fn extract_prompt_from_output(&mut self, text: &str) {
-        // 按行分割输出
-        let lines: Vec<&str> = text.lines().collect();
-        
-        for line in lines.iter().rev() {  // 从最后一行开始查找
-            let trimmed = line.trim();
-            
-            // 清理ANSI转义序列后检查
-            let clean_line = self.strip_ansi_codes(trimmed);
-            
-            // 检查是否包含常见的提示符模式
-            if self.is_prompt_like(&clean_line) {
-                // 记录提示符提取日志
-                log_prompt_extraction(trimmed, &clean_line);
-                
-                // 保存清理后的提示符用于显示
-                self.current_prompt = clean_line;
-                break;
+    // SSH输出处理 - 使用VT100处理ANSI序列，但不自己解释内容
+    pub fn add_ssh_output(&mut self, text: String) {
+        if !text.is_empty() {
+            crate::app_log!(info, "SSH", "收到SSH输出: {} 字节", text.len());
+
+            // 检查是否包含ANSI转义序列
+            if text.contains('\x1b') {
+                // 包含ANSI序列，使用VT100处理得到干净的文本
+                let mut parser = vt100::Parser::new(200, 50, 0);
+                parser.process(text.as_bytes());
+                let clean_text = parser.screen().contents();
+
+                crate::app_log!(debug, "SSH", "VT100处理后: {}", clean_text.trim());
+                self.add_output(clean_text);
+            } else {
+                // 纯文本，直接显示
+                self.add_output(text);
             }
         }
     }
-
-    // 使用专业的vt100库清理ANSI转义序列
-    fn strip_ansi_codes(&self, text: &str) -> String {
-        let original_length = text.len();
-        
-        // 创建一个虚拟终端解析器 (80列x24行，足够处理提示符)
-        let mut parser = Parser::new(24, 80, 0);
-        
-        // 处理输入文本
-        parser.process(text.as_bytes());
-        
-        // 获取解析后的纯文本内容
-        let screen = parser.screen();
-        
-        // 使用 contents() 方法获取整个屏幕的文本内容
-        let screen_contents = screen.contents();
-        
-        // 清理多余的空白字符和换行符
-        let cleaned_text = screen_contents
-            .lines()
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_string();
-        
-        let cleaned_length = cleaned_text.len();
-        
-        // 估算ANSI序列数量（原始长度 - 清理后长度的差异）
-        let estimated_ansi_count = if original_length > cleaned_length {
-            (original_length - cleaned_length) / 5  // 粗略估算，平均每个ANSI序列5个字符
-        } else {
-            0
-        };
-        
-        // 记录ANSI处理日志
-        if estimated_ansi_count > 0 {
-            log_ansi_processing(original_length, cleaned_length, estimated_ansi_count);
-        }
-        
-        cleaned_text
-    }
-
-    // 判断是否像提示符
-    fn is_prompt_like(&self, text: &str) -> bool {
-        if text.is_empty() {
-            return false;
-        }
-
-        // 常见的提示符特征：
-        // 1. 包含用户@主机模式: user@host
-        // 2. 包含路径符号: ~ 或 /
-        // 3. 包含常见提示符: $ # > ❯ ➜
-        // 4. 包含环境标识: (base) (venv) 等
-        // 5. 长度合理（不是很长的输出）
-
-        let prompt_indicators = ["$", "#", ">", "❯", "➜", "~", "@"];
-        let env_indicators = ["(base)", "(venv)", "(conda)"];
-        
-        // 长度检查：提示符通常不会太长
-        if text.len() > 200 {
-            return false;
-        }
-
-        // 包含提示符指示器
-        let has_prompt_char = prompt_indicators.iter().any(|&indicator| text.contains(indicator));
-        
-        // 包含环境指示器
-        let has_env_indicator = env_indicators.iter().any(|&indicator| text.contains(indicator));
-        
-        // 包含用户@主机模式
-        let has_user_host = text.contains('@') && text.chars().filter(|&c| c == '@').count() == 1;
-
-        // 以提示符字符结尾（常见模式）
-        let ends_with_prompt = text.ends_with('$') || text.ends_with('#') || 
-                              text.ends_with('>') || text.ends_with("❯ ") || 
-                              text.ends_with("➜ ") || text.ends_with("~ ");
-
-        // 符合条件的组合
-        has_prompt_char && (has_env_indicator || has_user_host || ends_with_prompt)
-    }
-
-
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         // 检查是否有命令结果需要处理
@@ -222,269 +161,336 @@ impl TerminalPanel {
         // 更新连接信息
         self.update_connection_info();
 
-        // 设置终端整体样式
+        // 设置现代终端样式 - 参考VS Code Terminal和iTerm2
         let terminal_style = egui::Style {
             visuals: egui::Visuals {
                 dark_mode: true,
-                panel_fill: egui::Color32::from_rgb(20, 22, 25),  // 深色背景
-                window_fill: egui::Color32::from_rgb(25, 27, 30),
-                override_text_color: Some(egui::Color32::from_rgb(240, 240, 240)),
+                panel_fill: egui::Color32::from_rgb(30, 30, 30), // 更现代的深灰色
+                window_fill: egui::Color32::from_rgb(24, 24, 24), // 纯深色背景
+                override_text_color: Some(egui::Color32::from_rgb(224, 224, 224)), // 柔和的白色
                 ..ui.style().visuals.clone()
+            },
+            spacing: egui::style::Spacing {
+                item_spacing: egui::vec2(8.0, 6.0),
+                button_padding: egui::vec2(16.0, 8.0),
+                indent: 20.0,
+                ..ui.style().spacing.clone()
             },
             ..ui.style().as_ref().clone()
         };
         ui.set_style(std::sync::Arc::new(terminal_style));
 
-        // 状态栏 - 美化后的样式
+        // 现代化状态栏 - 参考VS Code集成终端
         egui::TopBottomPanel::top("terminal_status")
-            .exact_height(40.0)
+            .exact_height(44.0)
             .show_inside(ui, |ui| {
-                // 添加状态栏背景
+                // 现代状态栏背景 - 渐变效果
+                let rect = ui.available_rect_before_wrap();
                 ui.painter().rect_filled(
-                    ui.available_rect_before_wrap(),
-                    egui::CornerRadius::same(4),
-                    egui::Color32::from_rgb(35, 37, 40),
+                    rect,
+                    egui::CornerRadius::ZERO,
+                    egui::Color32::from_rgb(40, 40, 40),
+                );
+
+                // 底部分隔线
+                ui.painter().hline(
+                    rect.left()..=rect.right(),
+                    rect.bottom(),
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60)),
                 );
 
                 ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    
+                    ui.add_space(16.0);
+
                     let current_status = self.check_connection_status();
                     let (status_icon, status_color, status_text) = if current_status {
-                        ("●", egui::Color32::from_rgb(0, 200, 83), "已连接")
+                        ("●", egui::Color32::from_rgb(40, 167, 69), "已连接") // GitHub绿色
                     } else {
-                        ("●", egui::Color32::from_rgb(255, 69, 58), "未连接")
+                        ("●", egui::Color32::from_rgb(203, 36, 49), "未连接") // GitHub红色
                     };
 
                     // 更新内部状态
                     self.is_connected = current_status;
 
-                    // 状态指示器
-                    ui.colored_label(
-                        status_color, 
-                        egui::RichText::new(status_icon).size(16.0)
-                    );
-                    ui.add_space(4.0);
-                    
-                    // 连接信息
+                    // 现代化状态指示器
+                    ui.colored_label(status_color, egui::RichText::new(status_icon).size(14.0));
+                    ui.add_space(8.0);
+
+                    // 连接信息 - 更现代的字体
                     ui.label(
                         egui::RichText::new(&self.connection_info)
-                            .font(egui::FontId::monospace(13.0))
-                            .color(egui::Color32::from_rgb(200, 200, 200))
+                            .font(egui::FontId::monospace(14.0))
+                            .color(egui::Color32::from_rgb(171, 178, 191)), // VS Code字体颜色
                     );
-                    
-                    ui.add_space(8.0);
+
+                    ui.add_space(12.0);
                     ui.label(
                         egui::RichText::new(status_text)
-                            .font(egui::FontId::proportional(12.0))
-                            .color(status_color)
+                            .font(egui::FontId::proportional(13.0))
+                            .color(status_color),
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(8.0);
-                        
-                        // 重连按钮 - 美化样式
-                        let reconnect_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(format!("{} 重连", regular::ARROW_CLOCKWISE))
-                                    .size(13.0)
-                            )
-                            .fill(egui::Color32::from_rgb(0, 122, 255))
-                            .corner_radius(egui::CornerRadius::same(4))
-                        );
-                        
-                        if reconnect_btn.clicked() {
-                            self.disconnect();
-                            self.add_output("已断开连接，请重新选择连接配置".to_string());
-                        }
+                        ui.add_space(16.0);
 
-                        ui.add_space(4.0);
+                        // 现代化按钮组
+                        ui.horizontal(|ui| {
+                            // 清屏按钮 - 现代扁平设计
+                            let clear_btn = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{}", regular::ERASER)).size(14.0),
+                                )
+                                .fill(egui::Color32::from_rgb(52, 53, 65)) // 深灰色
+                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 70)))
+                                .corner_radius(egui::CornerRadius::same(6)),
+                            );
 
-                        // 清屏按钮 - 美化样式
-                        let clear_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(format!("{} 清屏", regular::ERASER))
-                                    .size(13.0)
-                            )
-                            .fill(egui::Color32::from_rgb(88, 86, 214))
-                            .corner_radius(egui::CornerRadius::same(4))
-                        );
-                        
-                        if clear_btn.clicked() {
-                            self.output_buffer.clear();
-                        }
+                            if clear_btn.clicked() {
+                                self.output_buffer.clear();
+                            }
+
+                            ui.add_space(8.0);
+
+                            // 重连按钮 - GitHub风格
+                            let reconnect_btn = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{}", regular::ARROW_CLOCKWISE))
+                                        .size(14.0),
+                                )
+                                .fill(egui::Color32::from_rgb(13, 110, 253)) // Bootstrap蓝色
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgb(13, 110, 253),
+                                ))
+                                .corner_radius(egui::CornerRadius::same(6)),
+                            );
+
+                            if reconnect_btn.clicked() {
+                                self.disconnect();
+                                self.add_output("已断开连接，请重新选择连接配置".to_string());
+                            }
+                        });
                     });
                 });
             });
 
-        // 输入区域 - 美化后的样式
+        // 现代化输入区域 - 参考iTerm2和Windows Terminal
         egui::TopBottomPanel::bottom("terminal_input")
-            .exact_height(60.0)
+            .exact_height(64.0)
             .show_inside(ui, |ui| {
-                // 添加输入区域背景
+                let rect = ui.available_rect_before_wrap();
+
+                // 现代输入区域背景 - 更深的色调
                 ui.painter().rect_filled(
-                    ui.available_rect_before_wrap(),
-                    egui::CornerRadius::same(4),
-                    egui::Color32::from_rgb(40, 42, 45),
+                    rect,
+                    egui::CornerRadius::ZERO,
+                    egui::Color32::from_rgb(32, 32, 32),
                 );
 
-                // 使用垂直居中布局
+                // 顶部分隔线
+                ui.painter().hline(
+                    rect.left()..=rect.right(),
+                    rect.top(),
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60)),
+                );
+
+                // 垂直居中布局
                 ui.allocate_ui_with_layout(
                     ui.available_size(),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                        ui.add_space(16.0);
-                        
-                        // 美化的提示符 - 显示当前动态提示符
+                        ui.add_space(20.0);
+
+                        // 现代化提示符 - VS Code风格
                         ui.label(
                             egui::RichText::new(&self.current_prompt)
-                                .font(egui::FontId::monospace(16.0))
-                                .color(egui::Color32::from_rgb(0, 200, 83))
+                                .font(egui::FontId::monospace(15.0))
+                                .color(egui::Color32::from_rgb(78, 201, 176)), // 青绿色提示符
                         );
-                        
-                        ui.add_space(12.0);
 
-                        // 创建自定义样式的输入框
+                        ui.add_space(16.0);
+
+                        // 现代化输入框样式
                         let input_style = ui.style_mut();
-                        input_style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(55, 57, 60);
-                        input_style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(65, 67, 70);
-                        input_style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(70, 72, 75);
-                        input_style.visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_rgb(240, 240, 240);
-                        input_style.visuals.widgets.hovered.fg_stroke.color = egui::Color32::from_rgb(255, 255, 255);
-                        input_style.visuals.widgets.active.fg_stroke.color = egui::Color32::from_rgb(255, 255, 255);
-                        input_style.visuals.selection.bg_fill = egui::Color32::from_rgb(0, 150, 200);
-                        
-                        // 美化的输入框 - 增强可见性
+                        input_style.visuals.widgets.inactive.bg_fill =
+                            egui::Color32::from_rgb(45, 45, 45);
+                        input_style.visuals.widgets.hovered.bg_fill =
+                            egui::Color32::from_rgb(50, 50, 50);
+                        input_style.visuals.widgets.active.bg_fill =
+                            egui::Color32::from_rgb(24, 24, 24);
+                        input_style.visuals.widgets.inactive.fg_stroke.color =
+                            egui::Color32::from_rgb(224, 224, 224);
+                        input_style.visuals.widgets.hovered.fg_stroke.color =
+                            egui::Color32::from_rgb(255, 255, 255);
+                        input_style.visuals.widgets.active.fg_stroke.color =
+                            egui::Color32::from_rgb(255, 255, 255);
+                        input_style.visuals.selection.bg_fill =
+                            egui::Color32::from_rgb(0, 120, 215); // Windows蓝色选择
+                        input_style.visuals.widgets.inactive.corner_radius =
+                            egui::CornerRadius::same(8);
+                        input_style.visuals.widgets.hovered.corner_radius =
+                            egui::CornerRadius::same(8);
+                        input_style.visuals.widgets.active.corner_radius =
+                            egui::CornerRadius::same(8);
+
+                        // 现代化输入框 - 更好的视觉效果，支持中文输入
                         let input_response = ui.add_sized(
-                            [ui.available_width() - 140.0, 36.0],
+                            [ui.available_width() - 120.0, 40.0],
                             egui::TextEdit::singleline(&mut self.input_buffer)
                                 .font(egui::FontId::monospace(15.0))
-                                .hint_text("输入命令...")
+                                .hint_text("输入命令并按回车...")
                                 .desired_width(f32::INFINITY)
+                                .char_limit(1000), // 设置字符限制，确保有足够空间输入中文
                         );
 
-                        if input_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        // 自动获得焦点，便于输入
+                        if !input_response.has_focus() && self.is_connected {
+                            input_response.request_focus();
+                        }
+
+                        // 修复回车键处理 - 检查焦点状态和按键
+                        if input_response.has_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
+                            self.execute_command();
+                        }
+                        // 也支持失去焦点时的回车
+                        if input_response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
                             self.execute_command();
                         }
 
-                        ui.add_space(12.0);
+                        ui.add_space(16.0);
 
-                        // 美化的发送按钮
+                        // 现代化发送按钮 - GitHub Actions风格
                         let send_btn = ui.add_sized(
-                            [90.0, 36.0],
+                            [80.0, 40.0],
                             egui::Button::new(
-                                egui::RichText::new(format!("{} 发送", regular::PAPER_PLANE_TILT))
-                                    .size(14.0)
-                                    .color(egui::Color32::WHITE)
+                                egui::RichText::new(format!("{}", regular::PAPER_PLANE_TILT))
+                                    .size(16.0)
+                                    .color(egui::Color32::WHITE),
                             )
-                            .fill(egui::Color32::from_rgb(0, 150, 136))
-                            .corner_radius(egui::CornerRadius::same(8))
+                            .fill(egui::Color32::from_rgb(35, 134, 54)) // GitHub绿色
+                            .stroke(egui::Stroke::NONE)
+                            .corner_radius(egui::CornerRadius::same(8)),
                         );
-                        
+
                         if send_btn.clicked() {
                             self.execute_command();
                         }
 
-                        ui.add_space(16.0);
-                    }
+                        ui.add_space(20.0);
+                    },
                 );
             });
 
-        // 主终端输出区域 - 美化后的样式
+        // 现代化终端内容区域 - 参考Code和Terminal.app
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            // 添加输出区域背景
+            // 终端背景 - 纯黑色背景，如真实终端
             ui.painter().rect_filled(
                 ui.available_rect_before_wrap(),
-                egui::CornerRadius::same(6),
-                egui::Color32::from_rgb(16, 18, 21),
+                egui::CornerRadius::ZERO,
+                egui::Color32::from_rgb(12, 12, 12), // 纯黑背景
             );
 
-            // 添加内边距
+            // 现代化边距和滚动
             egui::Frame::NONE
-                .inner_margin(egui::Margin::same(12))
+                .inner_margin(egui::Margin::symmetric(20, 16))
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(self.scroll_to_bottom)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                // 现代化终端输出样式
                                 for line in &self.output_buffer {
-                                    // 添加行号和时间戳效果
                                     ui.horizontal_wrapped(|ui| {
                                         ui.spacing_mut().item_spacing.x = 0.0;
-                                        
-                                        // 根据内容类型设置不同颜色（这里直接在下面的if-else中处理）
-                                        
-                                        // 行号（可选）
+
+                                        // 现代终端颜色方案 - 参考One Dark Pro
                                         if line.starts_with("$ ") {
-                                            // 命令行，特殊样式
+                                            // 命令行 - 青色
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(line)
                                                         .font(egui::FontId::monospace(14.0))
-                                                        .color(egui::Color32::from_rgb(100, 200, 255))
-                                                        .strong()
+                                                        .color(egui::Color32::from_rgb(
+                                                            86, 182, 194,
+                                                        )), // 青色
                                                 )
                                                 .wrap(),
                                             );
-                                        } else if line.contains("错误") || line.contains("失败") || line.contains("Error") {
-                                            // 错误信息，红色
+                                        } else if line.contains("错误")
+                                            || line.contains("失败")
+                                            || line.contains("Error")
+                                        {
+                                            // 错误信息 - 红色
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(13.0))
-                                                        .color(egui::Color32::from_rgb(255, 100, 100))
+                                                        .font(egui::FontId::monospace(14.0))
+                                                        .color(egui::Color32::from_rgb(
+                                                            224, 108, 117,
+                                                        )), // 柔和红色
                                                 )
                                                 .wrap(),
                                             );
-                                        } else if line.contains("连接") || line.contains("成功") {
-                                            // 成功信息，绿色
+                                        } else if line.contains("连接") || line.contains("成功")
+                                        {
+                                            // 成功信息 - 绿色
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(13.0))
-                                                        .color(egui::Color32::from_rgb(100, 255, 100))
+                                                        .font(egui::FontId::monospace(14.0))
+                                                        .color(egui::Color32::from_rgb(
+                                                            152, 195, 121,
+                                                        )), // 柔和绿色
                                                 )
                                                 .wrap(),
                                             );
                                         } else if line.contains("正在") || line.contains("...") {
-                                            // 进度信息，黄色
+                                            // 进度信息 - 黄色
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(13.0))
-                                                        .color(egui::Color32::from_rgb(255, 200, 100))
+                                                        .font(egui::FontId::monospace(14.0))
+                                                        .color(egui::Color32::from_rgb(
+                                                            229, 192, 123,
+                                                        )), // 柔和黄色
                                                 )
                                                 .wrap(),
                                             );
                                         } else {
-                                            // 普通输出，灰白色
+                                            // 普通输出 - 高对比度白色
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(13.0))
-                                                        .color(egui::Color32::from_rgb(220, 220, 220))
+                                                        .font(egui::FontId::monospace(14.0))
+                                                        .color(egui::Color32::from_rgb(
+                                                            171, 178, 191,
+                                                        )), // VS Code默认文本色
                                                 )
                                                 .wrap(),
                                             );
                                         }
                                     });
                                 }
-                                
-                                // 如果没有输出，显示欢迎信息
+
+                                // 现代化欢迎界面
                                 if self.output_buffer.is_empty() {
                                     ui.vertical_centered(|ui| {
-                                        ui.add_space(50.0);
+                                        ui.add_space(60.0);
                                         ui.label(
-                                            egui::RichText::new("✨ 终端已准备就绪")
-                                                .font(egui::FontId::proportional(16.0))
-                                                .color(egui::Color32::from_rgb(150, 150, 150))
+                                            egui::RichText::new("🚀 终端已就绪")
+                                                .font(egui::FontId::proportional(18.0))
+                                                .color(egui::Color32::from_rgb(86, 182, 194)),
                                         );
-                                        ui.add_space(8.0);
+                                        ui.add_space(12.0);
                                         ui.label(
-                                            egui::RichText::new("请在下方输入命令或点击重连选择新的连接")
-                                                .font(egui::FontId::proportional(12.0))
-                                                .color(egui::Color32::from_rgb(120, 120, 120))
+                                            egui::RichText::new("在下方输入命令开始使用")
+                                                .font(egui::FontId::proportional(14.0))
+                                                .color(egui::Color32::from_rgb(171, 178, 191)),
                                         );
                                     });
                                 }
@@ -518,10 +524,10 @@ impl TerminalPanel {
                     }
                 }
                 "initial_output" => {
-                    // 处理初始shell输出（欢迎信息和提示符）
+                    // 处理初始shell输出（欢迎信息和提示符） - 使用VT100解析
                     if let Ok(output) = result.output {
-                        // 直接添加原始输出，不做任何修改
-                        self.add_output(output);
+                        // 使用专门的SSH输出处理方法，会进行VT100解析和提示符提取
+                        self.add_ssh_output(output);
                     }
                 }
                 "connect_failed" => {
@@ -546,17 +552,20 @@ impl TerminalPanel {
                         }
                     }
                 }
+
                 _ => {
-                    // 普通命令处理
+                    // 普通SSH命令处理 - 使用VT100解析
                     // 注意：命令已在execute_command中显示，这里只显示结果
                     match result.output {
                         Ok(output) => {
                             if !output.trim().is_empty() {
-                                self.add_output(output);
+                                // 使用SSH输出处理方法，会进行VT100解析和提示符更新
+                                self.add_ssh_output(output);
                             }
                         }
                         Err(error) => {
-                            self.add_output(format!("错误: {}", error));
+                            // SSH错误信息现在包含实际的命令输出，直接显示
+                            self.add_ssh_output(error);
                         }
                     }
                 }
@@ -576,42 +585,17 @@ impl TerminalPanel {
 
             self.add_output(format!("$ {}", command));
 
-            if self.is_connected && self.ssh_manager.is_some() && self.tab_id.is_some() {
-                // 使用真正的SSH连接执行命令
-                let ssh_manager = self.ssh_manager.clone().unwrap();
+            if self.is_connected && self.tab_id.is_some() {
+                // 直接调用SSH命令执行器
                 let tab_id = self.tab_id.clone().unwrap();
                 let cmd = command.trim().to_string();
                 let sender = self.command_sender.clone();
 
-                // 在后台执行SSH命令
-                tokio::spawn(async move {
-                    let result = match ssh_manager
-                        .lock()
-                        .await
-                        .execute_command(&tab_id, &cmd)
-                        .await
-                    {
-                        Ok(output) => {
-                            log::info!("SSH命令执行成功: {} -> {}", cmd, output);
-                            CommandResult {
-                                command: cmd.clone(),
-                                output: Ok(output),
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("SSH命令执行失败: {} -> {}", cmd, e);
-                            CommandResult {
-                                command: cmd.clone(),
-                                output: Err(e.to_string()),
-                            }
-                        }
-                    };
-
-                    // 发送结果回UI线程
-                    if let Some(sender) = sender {
-                        let _ = sender.send(result);
-                    }
-                });
+                if let (Some(executor), Some(sender)) = (&self.ssh_command_executor, sender) {
+                    executor(&tab_id, &cmd, sender);
+                } else {
+                    self.add_output("错误: SSH命令执行器未初始化".to_string());
+                }
             } else {
                 self.add_output("错误: 未连接到远程主机".to_string());
             }
@@ -619,8 +603,6 @@ impl TerminalPanel {
             self.input_buffer.clear();
         }
     }
-
-
 
     // 检查连接状态
     pub fn check_connection_status(&self) -> bool {
@@ -649,8 +631,8 @@ impl TerminalPanel {
 
         if should_disconnect {
             self.is_connected = false;
-            self.tab_id = None;  // 清除tab_id，回到快速连接界面
-            self.ssh_manager = None;    // 清除SSH管理器
+            self.tab_id = None; // 清除tab_id，回到快速连接界面
+            self.ssh_manager = None; // 清除SSH管理器
             self.add_output("连接已断开".to_string());
         }
     }

@@ -8,9 +8,9 @@ use tokio::sync::Mutex;
 
 use crate::ui::ConnectionConfig;
 use crate::utils::logger::{
-    log_ssh_connection_success, log_ssh_connection_failed,
-    log_ssh_command_execution, log_ssh_command_success, log_ssh_command_failed,
-    log_ssh_disconnection, log_ssh_authentication_method
+    log_ssh_authentication_method, log_ssh_command_execution, log_ssh_command_failed,
+    log_ssh_command_success, log_ssh_connection_failed, log_ssh_connection_success,
+    log_ssh_disconnection,
 };
 
 pub struct SshConnection {
@@ -30,10 +30,16 @@ impl std::fmt::Debug for SshConnection {
 impl SshConnection {
     pub async fn connect(config: &ConnectionConfig) -> Result<Self> {
         // 移除连接尝试日志 - 冗余，有成功/失败日志即可
-        
+
         let tcp = match TcpStream::connect(format!("{}:{}", config.host, config.port)) {
             Ok(stream) => {
-                crate::app_log!(debug, "SSH", "TCP连接建立成功: {}:{}", config.host, config.port);
+                crate::app_log!(
+                    debug,
+                    "SSH",
+                    "TCP连接建立成功: {}:{}",
+                    config.host,
+                    config.port
+                );
                 stream
             }
             Err(e) => {
@@ -42,10 +48,10 @@ impl SshConnection {
                 return Err(anyhow::anyhow!(error_msg));
             }
         };
-        
+
         let mut session = Session::new()?;
         session.set_tcp_stream(tcp.try_clone()?);
-        
+
         if let Err(e) = session.handshake() {
             let error_msg = format!("SSH握手失败: {}", e);
             log_ssh_connection_failed(&config.host, config.port, &config.username, &error_msg);
@@ -57,7 +63,8 @@ impl SshConnection {
             crate::ui::AuthType::Password => {
                 log_ssh_authentication_method(&config.username, "密码认证");
                 if let Some(password) = &config.password {
-                    session.userauth_password(&config.username, password)
+                    session
+                        .userauth_password(&config.username, password)
                         .map_err(|e| anyhow::anyhow!("密码认证失败: {}", e))
                 } else {
                     Err(anyhow::anyhow!("密码认证需要密码"))
@@ -66,12 +73,9 @@ impl SshConnection {
             crate::ui::AuthType::PublicKey => {
                 log_ssh_authentication_method(&config.username, "公钥认证");
                 if let Some(key_file) = &config.key_file {
-                    session.userauth_pubkey_file(
-                        &config.username,
-                        None,
-                        key_file.as_ref(),
-                        None,
-                    ).map_err(|e| anyhow::anyhow!("公钥认证失败: {}", e))
+                    session
+                        .userauth_pubkey_file(&config.username, None, key_file.as_ref(), None)
+                        .map_err(|e| anyhow::anyhow!("公钥认证失败: {}", e))
                 } else {
                     Err(anyhow::anyhow!("公钥认证需要私钥文件"))
                 }
@@ -101,36 +105,59 @@ impl SshConnection {
     }
 
     pub async fn execute_command(&mut self, command: &str) -> Result<String> {
-        let connection_id = format!("{}@{}:{}", 
-            self.connection_info.username, 
-            self.connection_info.host, 
-            self.connection_info.port);
-        
+        let connection_id = format!(
+            "{}@{}:{}",
+            self.connection_info.username, self.connection_info.host, self.connection_info.port
+        );
+
         log_ssh_command_execution(command, &connection_id);
 
         let result = || -> Result<String> {
             let mut channel = self.session.channel_session()?;
             channel.exec(command)?;
 
-            let mut output = String::new();
-            channel.read_to_string(&mut output)?;
+            // 同时读取stdout和stderr
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+
+            // 读取标准输出
+            channel.read_to_string(&mut stdout)?;
+            // 读取标准错误
+            channel.stderr().read_to_string(&mut stderr)?;
+
             channel.wait_close()?;
 
             let exit_status = channel.exit_status()?;
-            
+
+            // 合并输出内容
+            let combined_output = if stderr.is_empty() {
+                stdout
+            } else if stdout.is_empty() {
+                stderr
+            } else {
+                format!("{}\n{}", stdout, stderr)
+            };
+
             if exit_status == 0 {
-                log_ssh_command_success(command, &connection_id, output.len());
+                log_ssh_command_success(command, &connection_id, combined_output.len());
+                Ok(combined_output)
             } else {
                 let error_msg = format!("命令退出状态: {}", exit_status);
                 log_ssh_command_failed(command, &connection_id, &error_msg);
+                // 失败时返回错误，但错误信息包含实际的输出内容
+                Err(anyhow::anyhow!("{}", combined_output))
             }
-
-            Ok(output)
         }();
 
         match &result {
             Ok(output) => {
-                crate::app_log!(debug, "SSH", "命令执行成功: '{}' -> {} 字符", command, output.len());
+                crate::app_log!(
+                    debug,
+                    "SSH",
+                    "命令执行成功: '{}' -> {} 字符",
+                    command,
+                    output.len()
+                );
             }
             Err(e) => {
                 log_ssh_command_failed(command, &connection_id, &e.to_string());
@@ -144,52 +171,59 @@ impl SshConnection {
         &self.connection_info
     }
 
-    // 获取初始shell会话输出（连接后的欢迎信息和提示符）
-    pub async fn get_initial_output(&mut self) -> Result<String> {
-        let connection_id = format!("{}@{}:{}", 
-            self.connection_info.username, 
-            self.connection_info.host, 
-            self.connection_info.port);
-        
-        log_ssh_command_execution("获取初始shell输出", &connection_id);
+    // 获取SSH会话建立后的初始输出（包括Last login等信息）
+    pub async fn get_shell_initial_output(&mut self) -> Result<String> {
+        let connection_id = format!(
+            "{}@{}:{}",
+            self.connection_info.username, self.connection_info.host, self.connection_info.port
+        );
 
+        crate::app_log!(info, "SSH", "获取shell初始输出: {}", connection_id);
+
+        // 创建临时通道获取初始输出
         let mut channel = self.session.channel_session()?;
-        
-        // 启动shell会话
+        channel.request_pty("xterm", None, None)?;
         channel.shell()?;
-        
-        // 等待一下让shell初始化
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        
-        // 读取初始输出
+
+        // 等待服务器发送初始数据
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
         let mut output = String::new();
-        
-        // 等待shell输出稳定，多次尝试读取
-        for _ in 0..5 {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            
-            // 使用channel的read_to_string方法
-            let mut buffer = String::new();
-            match channel.read_to_string(&mut buffer) {
-                Ok(_) => {
-                    if !buffer.is_empty() {
-                        output.push_str(&buffer);
+        let mut buffer = Vec::new();
+        buffer.resize(8192, 0);
+
+        // 尝试读取所有可用数据
+        match channel.read(&mut buffer) {
+            Ok(bytes_read) => {
+                if bytes_read > 0 {
+                    let text = String::from_utf8_lossy(&buffer[..bytes_read]);
+                    crate::app_log!(info, "SSH", "读取到初始输出 {} 字节", bytes_read);
+                    output.push_str(&text);
+                } else {
+                    // 没有初始输出，发送换行符获取提示符
+                    crate::app_log!(info, "SSH", "无初始输出，发送换行符获取提示符");
+                    let _ = channel.write_all(b"\n");
+                    let _ = channel.flush();
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                    if let Ok(bytes) = channel.read(&mut buffer) {
+                        if bytes > 0 {
+                            let text = String::from_utf8_lossy(&buffer[..bytes]);
+                            output.push_str(&text);
+                        }
                     }
                 }
-                Err(_) => break,
             }
-            
-            // 如果读取到了内容就继续，否则停止
-            if buffer.is_empty() {
-                break;
+            Err(e) => {
+                crate::app_log!(warn, "SSH", "读取初始输出失败: {}", e);
             }
         }
-        
-        // 关闭通道
-        channel.close()?;
-        channel.wait_close()?;
 
-        log_ssh_command_success("获取初始shell输出", &connection_id, output.len());
+        // 优雅关闭通道，忽略关闭错误
+        let _ = channel.close();
+        let _ = channel.wait_close();
+
+        crate::app_log!(info, "SSH", "完成，输出长度: {} 字符", output.len());
         Ok(output)
     }
 
@@ -218,6 +252,33 @@ impl SshManager {
         self.connections
             .insert(id, Arc::new(Mutex::new(connection)));
         Ok(())
+    }
+
+    // 获取shell会话初始输出
+    pub async fn get_shell_initial_output(&self, id: &str) -> Result<String> {
+        crate::app_log!(
+            info,
+            "SSH",
+            "SshManager.get_shell_initial_output 被调用，id: {}",
+            id
+        );
+        crate::app_log!(
+            info,
+            "SSH",
+            "当前连接数: {}, 连接列表: {:?}",
+            self.connections.len(),
+            self.connections.keys().collect::<Vec<_>>()
+        );
+
+        if let Some(connection) = self.connections.get(id) {
+            crate::app_log!(info, "SSH", "找到连接 {}, 开始获取shell输出", id);
+            let mut conn = connection.lock().await;
+            conn.get_shell_initial_output().await
+        } else {
+            let error_msg = format!("连接不存在: {}", id);
+            crate::app_log!(error, "SSH", "{}", error_msg);
+            Err(anyhow::anyhow!(error_msg))
+        }
     }
 
     pub async fn execute_command(&self, id: &str, command: &str) -> Result<String> {
@@ -271,13 +332,4 @@ impl SshManager {
     }
 
     // 获取初始shell输出
-    pub async fn get_initial_output(&self, id: &str) -> Result<String> {
-        if let Some(connection) = self.connections.get(id) {
-            let mut conn = connection.lock().await;
-            conn.get_initial_output().await
-        } else {
-            Err(anyhow::anyhow!("连接不存在: {}", id))
-        }
-    }
 }
-

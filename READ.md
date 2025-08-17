@@ -88,6 +88,7 @@
 5. 解决问题的时候 应该从根源去解决，而非临时方案替代
 6. 每次修复完成之后 将整个项目 从 cargo check 检查出来的警告 全部都要修复，如果涉及到 某个 不存在 或者 临时的占位符 没有写具体逻辑，要补充进去
 7. 每一个icon和文字的组合的按钮 都应该是 左边icon右侧中文文字，且被按钮包围，且icon使用的是图标库的icon
+8. 一定要注意：在Rust异步代码中，MutexGuard 会在整个使用它的作用域内持有锁。
 
 ## 项目其他说明
 
@@ -108,8 +109,12 @@
       - connection_info
       - ssh_manager
       - ssh_status
-      - current_prompt SSH服务器返回的 ANSI转义序列 的完整信息中的部分信息 例如macos返回的是: `(base) ➜  ~ `
+      - current_prompt SSH服务器返回的 ANSI转义序列 的完整信息中的部分信息 例如macos返回的是: `(base) ➜  ~`
       - ...
+- ANSI转义序列 全部交给 VT100 去解析，配合各个组件实现功能
+  - 信息是在SSH会话建立时立即发送的，不是通过执行命令获取的。
+  - 本地代码不参与 ssh 返回的数据加工，而交给VT100进行过滤，拿到过滤数据后填充进入相应的组件中展示
+  - 相关文档： <https://www2.ccs.neu.edu/research/gpc/VonaUtils/vona/terminal/vtansi.htm>
 
 ## 项目相关指令
 

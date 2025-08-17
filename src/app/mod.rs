@@ -22,7 +22,7 @@ pub struct TerminalApp {
     ssh_manager: Arc<Mutex<SshManager>>,
 
     // 运行时
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,10 +41,48 @@ impl TerminalApp {
         // 创建 SSH 管理器
         let ssh_manager = Arc::new(Mutex::new(SshManager::new()));
 
+        // 创建运行时的Arc引用以便共享
+        let runtime_arc = Arc::new(runtime);
+
         // 初始化 tabs - 默认创建一个显示连接列表的tab
         let mut tabs = HashMap::new();
-        let default_terminal =
+        let mut default_terminal =
             TerminalPanel::new("快速连接".to_string(), "选择或添加连接".to_string());
+        // 设置SSH命令执行器回调
+        let ssh_manager_ref = ssh_manager.clone();
+        let runtime_ref = runtime_arc.clone();
+        default_terminal.set_ssh_command_executor(move |tab_id: &str, command: &str, sender| {
+            let ssh_manager = ssh_manager_ref.clone();
+            let tab_id = tab_id.to_string();
+            let cmd = command.to_string();
+
+            runtime_ref.spawn(async move {
+                let result = match ssh_manager
+                    .lock()
+                    .await
+                    .execute_command(&tab_id, &cmd)
+                    .await
+                {
+                    Ok(output) => {
+                        log::info!("SSH命令执行成功: {} -> {}", cmd, output);
+                        crate::ui::terminal_panel::CommandResult {
+                            command: cmd.clone(),
+                            output: Ok(output),
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("SSH命令执行失败: {} -> {}", cmd, e);
+                        crate::ui::terminal_panel::CommandResult {
+                            command: cmd.clone(),
+                            output: Err(e.to_string()),
+                        }
+                    }
+                };
+
+                // 发送结果回UI线程
+                let _ = sender.send(result);
+            });
+        });
         tabs.insert(
             "tab_1".to_string(),
             TabContent::Terminal(default_terminal, false),
@@ -57,7 +95,7 @@ impl TerminalApp {
             connection_manager: ConnectionManager::new(),
             plugins_panel: PluginsPanel::new(),
             ssh_manager,
-            runtime,
+            runtime: runtime_arc,
         }
     }
 
@@ -94,7 +132,7 @@ impl TerminalApp {
             Some(TabContent::Terminal(terminal, _tab_is_connected)) => {
                 // 使用 tab_id 判断是否已连接，有值就显示终端界面
                 let has_connection = terminal.tab_id.is_some();
-                
+
                 if !has_connection {
                     // 显示连接列表（快速连接界面）
                     if let Some(connection_config) =
@@ -129,8 +167,44 @@ impl TerminalApp {
         let tab_id = format!("tab_{}", self.tabs.len() + 1);
 
         // 创建新的终端面板（未连接状态）
-        let terminal_panel =
+        let mut terminal_panel =
             TerminalPanel::new("快速连接".to_string(), "选择或添加连接".to_string());
+
+        // 设置SSH命令执行器回调
+        let ssh_manager_ref = self.ssh_manager.clone();
+        let runtime_ref = self.runtime.clone();
+        terminal_panel.set_ssh_command_executor(move |tab_id: &str, command: &str, sender| {
+            let ssh_manager = ssh_manager_ref.clone();
+            let tab_id = tab_id.to_string();
+            let cmd = command.to_string();
+
+            runtime_ref.spawn(async move {
+                let result = match ssh_manager
+                    .lock()
+                    .await
+                    .execute_command(&tab_id, &cmd)
+                    .await
+                {
+                    Ok(output) => {
+                        log::info!("SSH命令执行成功: {} -> {}", cmd, output);
+                        crate::ui::terminal_panel::CommandResult {
+                            command: cmd.clone(),
+                            output: Ok(output),
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("SSH命令执行失败: {} -> {}", cmd, e);
+                        crate::ui::terminal_panel::CommandResult {
+                            command: cmd.clone(),
+                            output: Err(e.to_string()),
+                        }
+                    }
+                };
+
+                // 发送结果回UI线程
+                let _ = sender.send(result);
+            });
+        });
 
         // 添加到 tabs 中
         self.tabs
@@ -167,6 +241,41 @@ impl TerminalApp {
 
             // 设置SSH管理器和tab_id（立即切换到终端界面）
             terminal.set_ssh_manager(self.ssh_manager.clone(), self.active_tab.clone());
+            // 设置SSH命令执行器回调
+            let ssh_manager_ref = self.ssh_manager.clone();
+            let runtime_ref = self.runtime.clone();
+            terminal.set_ssh_command_executor(move |tab_id: &str, command: &str, sender| {
+                let ssh_manager = ssh_manager_ref.clone();
+                let tab_id = tab_id.to_string();
+                let cmd = command.to_string();
+
+                runtime_ref.spawn(async move {
+                    let result = match ssh_manager
+                        .lock()
+                        .await
+                        .execute_command(&tab_id, &cmd)
+                        .await
+                    {
+                        Ok(output) => {
+                            log::info!("SSH命令执行成功: {} -> {}", cmd, output);
+                            crate::ui::terminal_panel::CommandResult {
+                                command: cmd.clone(),
+                                output: Ok(output),
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("SSH命令执行失败: {} -> {}", cmd, e);
+                            crate::ui::terminal_panel::CommandResult {
+                                command: cmd.clone(),
+                                output: Err(e.to_string()),
+                            }
+                        }
+                    };
+
+                    // 发送结果回UI线程
+                    let _ = sender.send(result);
+                });
+            });
 
             // 异步建立 SSH 连接
             let ssh_manager = self.ssh_manager.clone();
@@ -178,52 +287,60 @@ impl TerminalApp {
 
             // 先尝试连接
             self.runtime.spawn(async move {
-                match ssh_manager
-                    .lock()
-                    .await
-                    .connect(tab_id.clone(), &config)
-                    .await
-                {
-                    Ok(_) => {
-                        // 记录连接成功日志
-                        crate::app_log!(info, "SSH", "SSH连接建立成功: {}@{}:{}", config.username, config.host, config.port);
-                        
-                        // 连接成功，先发送成功消息
-                        if let Some(sender) = command_sender.clone() {
-                            let _ = sender.send(crate::ui::terminal_panel::CommandResult {
-                                command: "connect_success".to_string(),
-                                output: Ok(format!("✅ 成功连接到 {}@{}:{}", config.username, config.host, config.port)),
-                            });
-                        }
+                    // 分离锁的获取和使用，避免在整个match期间持有锁
+                    let connect_result = {
+                        let mut manager = ssh_manager.lock().await;
+                        manager.connect(tab_id.clone(), &config).await
+                    }; // 锁在这里被释放
 
-                        // 获取初始shell输出（欢迎信息和提示符）
-                        match ssh_manager.lock().await.get_initial_output(&tab_id).await {
-                            Ok(initial_output) => {
-                                crate::app_log!(info, "SSH", "获取到初始shell输出，长度: {} 字符", initial_output.len());
-                                if let Some(sender) = command_sender {
-                                    // 发送原始的shell输出
-                                    let _ = sender.send(crate::ui::terminal_panel::CommandResult {
-                                        command: "initial_output".to_string(),
-                                        output: Ok(initial_output),
-                                    });
+                    match connect_result {
+                        Ok(_) => {
+                            // 记录连接成功日志
+                            crate::app_log!(info, "SSH", "SSH连接建立成功: {}@{}:{}", config.username, config.host, config.port);
+
+                            // 连接成功，先发送成功消息
+                            if let Some(sender) = command_sender.clone() {
+                                let _ = sender.send(crate::ui::terminal_panel::CommandResult {
+                                    command: "connect_success".to_string(),
+                                    output: Ok("✅ 连接成功".to_string()),
+                                });
+                            }
+
+                            // 获取shell会话初始输出（包括Last login等信息）
+                            crate::app_log!(info, "SSH", "准备调用get_shell_initial_output，tab_id: {}", tab_id);
+
+                            let initial_output_result = {
+                                let manager = ssh_manager.lock().await;
+                                crate::app_log!(info, "SSH", "成功获取ssh_manager锁，开始调用get_shell_initial_output");
+                                manager.get_shell_initial_output(&tab_id).await
+                            }; // 锁在这里被释放
+
+                            match initial_output_result {
+                                Ok(initial_output) => {
+                                    crate::app_log!(info, "SSH", "获取到shell初始输出: {}", initial_output);
+                                    if let Some(sender) = command_sender {
+                                        let _ = sender.send(crate::ui::terminal_panel::CommandResult {
+                                            command: "initial_output".to_string(),
+                                            output: Ok(initial_output),
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    crate::app_log!(warn, "SSH", "获取shell初始输出失败: {}", e);
                                 }
                             }
-                            Err(e) => {
-                                crate::app_log!(warn, "SSH", "获取初始shell输出失败: {}", e);
+                        }
+                        Err(e) => {
+                            // 连接失败，发送错误消息
+                            if let Some(sender) = command_sender {
+                                let _ = sender.send(crate::ui::terminal_panel::CommandResult {
+                                    command: "connect_failed".to_string(),
+                                    output: Err(format!("❌ 连接失败: {}\n\n请检查:\n• 主机地址和端口是否正确\n• 用户名和密码是否正确\n• 网络连接是否正常\n• 目标主机SSH服务是否启用", e)),
+                                });
                             }
                         }
                     }
-                    Err(e) => {
-                        // 连接失败，发送错误消息
-                        if let Some(sender) = command_sender {
-                            let _ = sender.send(crate::ui::terminal_panel::CommandResult {
-                                command: "connect_failed".to_string(),
-                                output: Err(format!("❌ 连接失败: {}\n\n请检查:\n• 主机地址和端口是否正确\n• 用户名和密码是否正确\n• 网络连接是否正常\n• 目标主机SSH服务是否启用", e)),
-                            });
-                        }
-                    }
-                }
-            });
+                });
 
             // 注意：不在这里设置连接状态，而是在收到连接结果后设置
         }
@@ -248,11 +365,12 @@ impl eframe::App for TerminalApp {
             });
         });
 
-        // 偶尔记录连接统计（每100帧一次）
+        // 连接统计 - 使用更安全的方式，降低频率避免锁竞争
         static mut FRAME_COUNT: u64 = 0;
         unsafe {
             FRAME_COUNT += 1;
-            if FRAME_COUNT % 100 == 0 {
+            // 每500帧记录一次（约每8-10秒，取决于帧率）
+            if FRAME_COUNT % 500 == 0 {
                 let (count, connections) = self.get_connection_stats();
                 if count > 0 {
                     log::debug!("当前活跃连接数: {}, 连接列表: {:?}", count, connections);
