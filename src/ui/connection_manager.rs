@@ -17,7 +17,8 @@ impl ConnectionManager {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, config: &mut AppConfig) {
+    pub fn show(&mut self, ui: &mut egui::Ui, config: &mut AppConfig) -> Option<ConnectionConfig> {
+        let mut connection_to_establish = None;
         ui.heading("快速连接");
         
         ui.horizontal(|ui| {
@@ -74,13 +75,15 @@ impl ConnectionManager {
             
             // 处理连接
             if let Some(index) = to_connect {
-                // TODO: 实现实际的 SSH 连接逻辑
                 log::info!("Connecting to: {:?}", config.connections[index]);
+                connection_to_establish = Some(config.connections[index].clone());
             }
         });
         
         // 添加/编辑对话框
         self.show_add_edit_dialog(ui, config);
+        
+        connection_to_establish
     }
 
     fn show_add_edit_dialog(&mut self, ui: &mut egui::Ui, config: &mut AppConfig) {
@@ -94,7 +97,7 @@ impl ConnectionManager {
             let mut should_save = false;
             let mut should_cancel = false;
             
-            egui::Window::new("添加/编辑连接")
+            egui::Window::new("Add/Edit Connection")
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {

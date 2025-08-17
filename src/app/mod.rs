@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::config::AppConfig;
-use crate::ui::{ConnectionManager, TerminalPanel, PluginsPanel};
+use crate::ui::{ConnectionManager, TerminalPanel, PluginsPanel, ConnectionConfig};
 use crate::ssh::SshManager;
 
 pub struct TerminalApp {
@@ -32,7 +32,7 @@ pub enum TabContent {
 }
 
 impl TerminalApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // 创建 Tokio 运行时
         let runtime = tokio::runtime::Runtime::new().unwrap();
         
@@ -57,7 +57,7 @@ impl TerminalApp {
         }
     }
 
-    fn render_top_panel(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn render_top_panel(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             // Tab 切换按钮
             for (tab_id, content) in &self.tabs {
@@ -84,10 +84,12 @@ impl TerminalApp {
         });
     }
 
-    fn render_main_content(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn render_main_content(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
         match self.tabs.get_mut(&self.active_tab) {
             Some(TabContent::ConnectionList) => {
-                self.connection_manager.show(ui, &mut self.config);
+                if let Some(connection_config) = self.connection_manager.show(ui, &mut self.config) {
+                    self.create_terminal_tab(connection_config);
+                }
             }
             Some(TabContent::Terminal(terminal)) => {
                 terminal.show(ui);
@@ -110,6 +112,35 @@ impl TerminalApp {
                 
                 self.plugins_panel.show(ui);
             });
+    }
+
+    fn create_terminal_tab(&mut self, connection_config: ConnectionConfig) {
+        // 生成唯一的 tab ID
+        let tab_id = uuid::Uuid::new_v4().to_string();
+        
+        // 创建终端面板
+        let terminal_panel = TerminalPanel::new(
+            connection_config.name.clone(),
+            format!("{}@{}:{}", connection_config.username, connection_config.host, connection_config.port)
+        );
+        
+        // 添加到 tabs 中
+        self.tabs.insert(tab_id.clone(), TabContent::Terminal(terminal_panel));
+        self.active_tab = tab_id.clone();
+        
+        // 异步建立 SSH 连接
+        let ssh_manager = self.ssh_manager.clone();
+        let config = connection_config.clone();
+        self.runtime.spawn(async move {
+            match ssh_manager.lock().await.connect(tab_id.clone(), &config).await {
+                Ok(_) => {
+                    log::info!("SSH connection established for {}", config.name);
+                }
+                Err(e) => {
+                    log::error!("Failed to establish SSH connection: {}", e);
+                }
+            }
+        });
     }
 }
 

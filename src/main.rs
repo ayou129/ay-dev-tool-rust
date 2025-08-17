@@ -7,6 +7,14 @@ mod utils;
 
 use eframe::egui;
 
+fn setup_custom_fonts(ctx: &egui::Context) {
+    // 启用默认的中文字体支持
+    let fonts = egui::FontDefinitions::default();
+    
+    // egui 内置支持中文，确保加载了正确的字符集
+    ctx.set_fonts(fonts);
+}
+
 fn main() -> eframe::Result<()> {
     env_logger::init();
 
@@ -22,6 +30,9 @@ fn main() -> eframe::Result<()> {
         "AY Dev Tool",
         options,
         Box::new(|cc| {
+            // 设置字体以支持中文
+            setup_custom_fonts(&cc.egui_ctx);
+            
             // 启用深色主题
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             

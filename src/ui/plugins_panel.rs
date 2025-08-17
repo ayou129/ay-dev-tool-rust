@@ -2,6 +2,7 @@ use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::VecDeque;
 use crate::plugins::{system_monitor::SystemMonitor, software_detector::SoftwareDetector, Plugin};
+use crate::utils::{format_bytes, format_percentage};
 
 pub struct PluginsPanel {
     system_monitor: SystemMonitor,
@@ -25,18 +26,28 @@ impl PluginsPanel {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing("📊 系统监控", |ui| {
-            self.show_system_monitor_panel(ui);
-        });
+        // 系统监控开关
+        ui.checkbox(&mut self.show_system_monitor, "启用系统监控");
+        
+        if self.show_system_monitor {
+            ui.collapsing("📊 系统监控", |ui| {
+                self.show_system_monitor_panel(ui);
+            });
+        }
         
         ui.collapsing("📁 文件浏览器", |ui| {
             ui.label("文件浏览器 - 开发中");
             ui.small("将显示当前连接的远程目录结构");
         });
         
-        ui.collapsing("⚙️ 软件检测", |ui| {
-            self.show_software_panel(ui);
-        });
+        // 软件检测开关
+        ui.checkbox(&mut self.show_software_list, "启用软件检测");
+        
+        if self.show_software_list {
+            ui.collapsing("⚙️ 软件检测", |ui| {
+                self.show_software_panel(ui);
+            });
+        }
     }
 
     fn show_system_monitor_panel(&mut self, ui: &mut egui::Ui) {
@@ -63,7 +74,7 @@ impl PluginsPanel {
                 ui.label("CPU:");
                 ui.colored_label(
                     egui::Color32::from_rgb(100, 150, 255),
-                    format!("{:.1}%", data["cpu"]["average_usage"].as_f64().unwrap_or(0.0))
+                    format_percentage(data["cpu"]["average_usage"].as_f64().unwrap_or(0.0))
                 );
             });
             
@@ -71,8 +82,12 @@ impl PluginsPanel {
                 ui.label("内存:");
                 ui.colored_label(
                     egui::Color32::from_rgb(255, 150, 100),
-                    format!("{:.1}%", data["memory"]["usage_percent"].as_f64().unwrap_or(0.0))
+                    format_percentage(data["memory"]["usage_percent"].as_f64().unwrap_or(0.0))
                 );
+                ui.small(format!("({} / {})", 
+                    format_bytes(data["memory"]["used"].as_u64().unwrap_or(0)),
+                    format_bytes(data["memory"]["total"].as_u64().unwrap_or(0))
+                ));
             });
             
             // CPU 使用率图表

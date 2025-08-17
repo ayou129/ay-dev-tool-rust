@@ -2,7 +2,7 @@ pub mod connection_manager;
 pub mod terminal_panel;
 pub mod plugins_panel;
 
-use eframe::egui;
+
 use serde::{Deserialize, Serialize};
 
 pub use connection_manager::ConnectionManager;

@@ -84,6 +84,7 @@
 1. 使用 cargo install cargo-edit + cargo upgrade 来升级依赖，必要时使用 cargo upgrade --incompatible
 2. 安装依赖的时候 应该首选不冲突且版本最新的为主 也就是 cargo add xxxx
 3. 最重要的一点：实现的时候 要简约+优雅 并且 在功能合理的前提下，代码一定要符合设计模式，例如单一职责
+4. 不允许使用 #[allow(dead_code)] 的代码解决警告，应该去正确的实现逻辑
 
 ## 项目相关指令
 
