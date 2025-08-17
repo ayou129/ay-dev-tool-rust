@@ -10,6 +10,9 @@ use eframe::egui;
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     
+    // 添加Phosphor图标字体支持
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    
     // 尝试加载系统的微软雅黑字体
     if cfg!(windows) {
         // Windows 系统字体路径

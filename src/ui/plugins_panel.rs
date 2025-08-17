@@ -37,7 +37,7 @@ impl PluginsPanel {
                    if self.system_monitor.is_enabled() { "可用" } else { "不可用" }));
         
         if self.show_system_monitor {
-            ui.collapsing(format!("{} 系统监控", regular::CHART_LINE), |ui| {
+            ui.collapsing(egui::RichText::new(format!("{} 系统监控", regular::CHART_LINE)), |ui| {
                 self.show_system_monitor_panel(ui);
             });
         }
@@ -48,7 +48,7 @@ impl PluginsPanel {
                    if self.file_browser.is_enabled() { "可用" } else { "不可用" }));
         
         if self.show_file_browser {
-            ui.collapsing(format!("{} 文件浏览器", regular::FOLDER), |ui| {
+            ui.collapsing(egui::RichText::new(format!("{} 文件浏览器", regular::FOLDER)), |ui| {
                 self.show_file_browser_panel(ui);
             });
         }
@@ -59,7 +59,7 @@ impl PluginsPanel {
                    if self.software_detector.is_enabled() { "可用" } else { "不可用" }));
         
         if self.show_software_list {
-            ui.collapsing(format!("{} 软件检测", regular::GEAR), |ui| {
+            ui.collapsing(egui::RichText::new(format!("{} 软件检测", regular::GEAR)), |ui| {
                 self.show_software_panel(ui);
             });
         }
@@ -162,16 +162,13 @@ impl PluginsPanel {
     }
 
     fn show_software_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(regular::MAGNIFYING_GLASS);
-            if ui.button("检测软件").clicked() {
-                // 启动软件检测
-                let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                    self.software_detector.initialize().await?;
-                    self.software_detector.update().await
-                });
-            }
-        });
+        if ui.button(egui::RichText::new(format!("{} 检测软件", regular::MAGNIFYING_GLASS)).size(14.0)).clicked() {
+            // 启动软件检测
+            let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                self.software_detector.initialize().await?;
+                self.software_detector.update().await
+            });
+        }
         
         let data = self.software_detector.render_data();
         
@@ -190,7 +187,7 @@ impl PluginsPanel {
                         (regular::X_CIRCLE, egui::Color32::RED)
                     };
                     
-                    ui.colored_label(color, icon);
+                    ui.colored_label(color, egui::RichText::new(icon).size(14.0));
                     ui.label(name);
                     
                     if let Some(ver) = version {
@@ -199,12 +196,9 @@ impl PluginsPanel {
                     
                     if !installed {
                         if let Some(install_cmd) = software["install_command"].as_str() {
-                            ui.horizontal(|ui| {
-                                ui.label(regular::DOWNLOAD);
-                                if ui.small_button("安装").on_hover_text(install_cmd).clicked() {
-                                    // TODO: 执行安装命令
-                                }
-                            });
+                            if ui.small_button(egui::RichText::new(format!("{} 安装", regular::DOWNLOAD)).size(12.0)).on_hover_text(install_cmd).clicked() {
+                                // TODO: 执行安装命令
+                            }
                         }
                     }
                 });
@@ -227,15 +221,12 @@ impl PluginsPanel {
     }
 
     fn show_file_browser_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(regular::ARROW_CLOCKWISE);
-            if ui.button("刷新").clicked() {
-                let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                    self.file_browser.initialize().await?;
-                    self.file_browser.update().await
-                });
-            }
-        });
+        if ui.button(egui::RichText::new(format!("{} 刷新", regular::ARROW_CLOCKWISE)).size(14.0)).clicked() {
+            let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                self.file_browser.initialize().await?;
+                self.file_browser.update().await
+            });
+        }
         
         let data = self.file_browser.render_data();
         
@@ -257,20 +248,17 @@ impl PluginsPanel {
                         let icon = if is_directory { regular::FOLDER } else { regular::FILE };
                         
                         if is_directory {
-                            ui.horizontal(|ui| {
-                                ui.label(icon);
-                                if ui.button(truncate_string(name, 25)).clicked() {
-                                    // 导航到目录
-                                    let mut new_path = std::path::PathBuf::from(data["current_path"].as_str().unwrap_or("/"));
-                                    new_path.push(name);
-                                    self.file_browser.set_path(new_path);
-                                    let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                                        self.file_browser.update().await
-                                    });
-                                }
-                            });
+                            if ui.button(egui::RichText::new(format!("{} {}", icon, truncate_string(name, 25))).size(14.0)).clicked() {
+                                // 导航到目录
+                                let mut new_path = std::path::PathBuf::from(data["current_path"].as_str().unwrap_or("/"));
+                                new_path.push(name);
+                                self.file_browser.set_path(new_path);
+                                let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                                    self.file_browser.update().await
+                                });
+                            }
                         } else {
-                            ui.label(icon);
+                            ui.label(egui::RichText::new(icon).size(14.0));
                             ui.label(truncate_string(name, 25));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.small(format!("{} bytes", size));

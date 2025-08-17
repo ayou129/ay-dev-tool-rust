@@ -76,7 +76,7 @@ impl TerminalApp {
             ui.separator();
             
             // 添加新终端按钮
-            if ui.button(regular::PLUS).clicked() {
+            if ui.button(egui::RichText::new(format!("{} 新建", regular::PLUS)).size(16.0)).clicked() {
                 self.create_new_tab();
             }
         });
@@ -122,6 +122,16 @@ impl TerminalApp {
         // 添加到 tabs 中
         self.tabs.insert(tab_id.clone(), TabContent::Terminal(terminal_panel, false));
         self.active_tab = tab_id;
+    }
+    
+    // 获取当前连接状态信息
+    fn get_connection_stats(&self) -> (usize, Vec<String>) {
+        if let Ok(manager) = self.ssh_manager.try_lock() {
+            let connections = manager.get_connections();
+            (connections.len(), connections)
+        } else {
+            (0, vec![])
+        }
     }
 
     fn connect_to_terminal(&mut self, connection_config: ConnectionConfig) {
@@ -195,6 +205,18 @@ impl eframe::App for TerminalApp {
                 self.render_main_content(ctx, ui);
             });
         });
+        
+        // 偶尔记录连接统计（每100帧一次）
+        static mut FRAME_COUNT: u64 = 0;
+        unsafe {
+            FRAME_COUNT += 1;
+            if FRAME_COUNT % 100 == 0 {
+                let (count, connections) = self.get_connection_stats();
+                if count > 0 {
+                    log::debug!("当前活跃连接数: {}, 连接列表: {:?}", count, connections);
+                }
+            }
+        }
         
         // 请求重绘以保持响应
         ctx.request_repaint();

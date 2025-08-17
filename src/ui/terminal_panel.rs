@@ -76,6 +76,17 @@ impl TerminalPanel {
     pub fn get_command_sender(&self) -> Option<mpsc::UnboundedSender<CommandResult>> {
         self.command_sender.clone()
     }
+    
+    // 更新连接信息显示
+    pub fn update_connection_info(&mut self) {
+        if let (Some(ssh_manager), Some(connection_id)) = (&self.ssh_manager, &self.connection_id) {
+            if let Ok(manager) = ssh_manager.try_lock() {
+                if let Some(info) = manager.get_connection_info(connection_id) {
+                    self.connection_info = format!("{}@{}:{}", info.username, info.host, info.port);
+                }
+            }
+        }
+    }
 
     pub fn add_output(&mut self, text: String) {
         self.output_buffer.push_back(text);
@@ -91,7 +102,8 @@ impl TerminalPanel {
     pub fn set_connected(&mut self, connected: bool) {
         self.is_connected = connected;
         if connected {
-            self.add_output("连接成功!".to_string());
+            // 使用 execute_ssh_command 显示连接成功的欢迎信息
+            self.execute_ssh_command("connect", "连接成功! 终端已就绪.");
         } else {
             self.add_output("连接断开".to_string());
         }
@@ -101,34 +113,37 @@ impl TerminalPanel {
         // 检查是否有命令结果需要处理
         self.process_command_results();
         
+        // 更新连接信息
+        self.update_connection_info();
+        
         // 使用垂直布局，确保输入区域在底部
         egui::TopBottomPanel::top("terminal_status").show_inside(ui, |ui| {
             // 连接状态栏
             ui.horizontal(|ui| {
-                let (status_icon, status_color) = if self.is_connected {
+                let current_status = self.check_connection_status();
+                let (status_icon, status_color) = if current_status {
                     ("●", egui::Color32::GREEN)
                 } else {
                     ("●", egui::Color32::RED)
                 };
                 
+                // 更新内部状态
+                self.is_connected = current_status;
+                
                 ui.colored_label(status_color, status_icon);
                 ui.label(&self.connection_info);
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(regular::ARROW_CLOCKWISE);
-                        if ui.button("重连").clicked() {
-                            // TODO: 实现重连逻辑
-                            self.add_output("正在重新连接...".to_string());
-                        }
-                    });
+                    if ui.button(egui::RichText::new(format!("{} 重连", regular::ARROW_CLOCKWISE)).size(14.0)).clicked() {
+                        // 先断开现有连接
+                        self.disconnect();
+                        self.add_output("正在重新连接...".to_string());
+                        // TODO: 这里应该触发重新连接逻辑
+                    }
                     
-                    ui.horizontal(|ui| {
-                        ui.label(regular::ERASER);
-                        if ui.button("清屏").clicked() {
-                            self.output_buffer.clear();
-                        }
-                    });
+                    if ui.button(egui::RichText::new(format!("{} 清屏", regular::ERASER)).size(14.0)).clicked() {
+                        self.output_buffer.clear();
+                    }
                 });
             });
         });
@@ -148,12 +163,9 @@ impl TerminalPanel {
                     self.execute_command();
                 }
                 
-                ui.horizontal(|ui| {
-                    ui.label(regular::PAPER_PLANE_TILT);
-                    if ui.button("发送").clicked() {
-                        self.execute_command();
-                    }
-                });
+                if ui.button(egui::RichText::new(format!("{} 发送", regular::PAPER_PLANE_TILT)).size(14.0)).clicked() {
+                    self.execute_command();
+                }
             });
         });
 
@@ -194,6 +206,11 @@ impl TerminalPanel {
         }
         
         for result in results {
+            // 显示执行的命令
+            if !result.command.trim().is_empty() {
+                self.add_output(format!("$ {}", result.command));
+            }
+            
             match result.output {
                 Ok(output) => {
                     if !output.trim().is_empty() {
@@ -258,9 +275,10 @@ impl TerminalPanel {
         }
     }
 
-    // 提供SSH命令执行的接口
-    pub fn execute_ssh_command(&mut self, _command: &str, result: &str) {
-        // 只添加结果，命令已在execute_command中添加
+    // 提供SSH命令执行的接口，用于直接添加命令执行结果
+    pub fn execute_ssh_command(&mut self, command: &str, result: &str) {
+        // 显示执行的命令和结果
+        self.add_output(format!("$ {}", command));
         self.add_output(result.to_string());
     }
 

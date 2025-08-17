@@ -23,20 +23,14 @@ impl ConnectionManager {
         ui.heading("快速连接");
         
         ui.horizontal(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(regular::PLUS);
-                if ui.button("添加终端").clicked() {
-                    self.show_add_dialog = true;
-                    self.edit_connection = Some(ConnectionConfig::default());
-                }
-            });
+            if ui.button(egui::RichText::new(format!("{} 添加终端", regular::PLUS)).size(16.0)).clicked() {
+                self.show_add_dialog = true;
+                self.edit_connection = Some(ConnectionConfig::default());
+            }
             
-            ui.horizontal(|ui| {
-                ui.label(regular::TRASH);
-                if ui.button("清空所有").clicked() {
-                    config.connections.clear();
-                }
-            });
+            if ui.button(egui::RichText::new(format!("{} 清空所有", regular::TRASH)).size(16.0)).clicked() {
+                config.connections.clear();
+            }
         });
         
         ui.separator();
@@ -58,26 +52,17 @@ impl ConnectionManager {
                         });
                         
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(regular::TRASH);
-                                if ui.button("删除").clicked() {
-                                    to_remove = Some(i);
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(regular::PENCIL_SIMPLE);
-                                if ui.button("编辑").clicked() {
-                                    self.edit_connection = Some(connection.clone());
-                                    self.show_add_dialog = true;
-                                    self.selected_connection = Some(i);
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label(regular::LINK);
-                                if ui.button("连接").clicked() {
-                                    to_connect = Some(i);
-                                }
-                            });
+                            if ui.button(egui::RichText::new(format!("{} 删除", regular::TRASH)).size(14.0)).clicked() {
+                                to_remove = Some(i);
+                            }
+                            if ui.button(egui::RichText::new(format!("{} 编辑", regular::PENCIL_SIMPLE)).size(14.0)).clicked() {
+                                self.edit_connection = Some(connection.clone());
+                                self.show_add_dialog = true;
+                                self.selected_connection = Some(i);
+                            }
+                            if ui.button(egui::RichText::new(format!("{} 连接", regular::LINK)).size(14.0)).clicked() {
+                                to_connect = Some(i);
+                            }
                         });
                     });
                 });
@@ -162,7 +147,7 @@ impl ConnectionManager {
                                         let mut key_file = connection.key_file.clone().unwrap_or_default();
                                         ui.horizontal(|ui| {
                                             ui.text_edit_singleline(&mut key_file);
-                                            if ui.button(format!("{} 选择文件", regular::FOLDER)).clicked() {
+                                            if ui.button(egui::RichText::new(format!("{} 选择文件", regular::FOLDER)).size(14.0)).clicked() {
                                                 // TODO: 实现文件选择器
                                             }
                                         });
@@ -178,19 +163,13 @@ impl ConnectionManager {
 
                         ui.separator();
                         ui.horizontal(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(regular::CHECK);
-                                if ui.button("保存").clicked() {
-                                    should_save = true;
-                                }
-                            });
+                            if ui.button(egui::RichText::new(format!("{} 保存", regular::CHECK)).size(14.0)).clicked() {
+                                should_save = true;
+                            }
 
-                            ui.horizontal(|ui| {
-                                ui.label(regular::X);
-                                if ui.button("取消").clicked() {
-                                    should_cancel = true;
-                                }
-                            });
+                            if ui.button(egui::RichText::new(format!("{} 取消", regular::X)).size(14.0)).clicked() {
+                                should_cancel = true;
+                            }
                         });
                     });
             

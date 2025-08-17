@@ -68,6 +68,13 @@ impl SshConnection {
     pub fn get_info(&self) -> &ConnectionConfig {
         &self.connection_info
     }
+    
+    // 检查TCP连接状态
+    pub fn is_alive(&self) -> bool {
+        // 尝试读取TCP流的状态来判断连接是否仍然活跃
+        // 这里使用stream的peer_addr方法来检查连接状态
+        self.stream.peer_addr().is_ok()
+    }
 }
 
 #[derive(Debug)]
@@ -102,10 +109,33 @@ impl SshManager {
     }
 
     pub fn is_connected(&self, id: &str) -> bool {
-        self.connections.contains_key(id)
+        if let Some(connection) = self.connections.get(id) {
+            // 尝试检查连接是否真正活跃
+            if let Ok(conn) = connection.try_lock() {
+                conn.is_alive()
+            } else {
+                // 如果无法获取锁，假设连接存在
+                true
+            }
+        } else {
+            false
+        }
     }
 
     pub fn get_connections(&self) -> Vec<String> {
         self.connections.keys().cloned().collect()
+    }
+    
+    // 获取连接信息
+    pub fn get_connection_info(&self, id: &str) -> Option<ConnectionConfig> {
+        if let Some(connection) = self.connections.get(id) {
+            if let Ok(conn) = connection.try_lock() {
+                Some(conn.get_info().clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
