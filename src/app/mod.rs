@@ -185,15 +185,32 @@ impl TerminalApp {
                     .await
                 {
                     Ok(_) => {
-                        // 连接成功，发送成功消息
-                        if let Some(sender) = command_sender {
+                        // 记录连接成功日志
+                        crate::app_log!(info, "SSH", "SSH连接建立成功: {}@{}:{}", config.username, config.host, config.port);
+                        
+                        // 连接成功，先发送成功消息
+                        if let Some(sender) = command_sender.clone() {
                             let _ = sender.send(crate::ui::terminal_panel::CommandResult {
                                 command: "connect_success".to_string(),
-                                output: Ok(format!(
-                                    "✅ 成功连接到 {}@{}:{}\n欢迎使用终端！",
-                                    config.username, config.host, config.port
-                                )),
+                                output: Ok(format!("✅ 成功连接到 {}@{}:{}", config.username, config.host, config.port)),
                             });
+                        }
+
+                        // 获取初始shell输出（欢迎信息和提示符）
+                        match ssh_manager.lock().await.get_initial_output(&tab_id).await {
+                            Ok(initial_output) => {
+                                crate::app_log!(info, "SSH", "获取到初始shell输出，长度: {} 字符", initial_output.len());
+                                if let Some(sender) = command_sender {
+                                    // 发送原始的shell输出
+                                    let _ = sender.send(crate::ui::terminal_panel::CommandResult {
+                                        command: "initial_output".to_string(),
+                                        output: Ok(initial_output),
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                crate::app_log!(warn, "SSH", "获取初始shell输出失败: {}", e);
+                            }
                         }
                     }
                     Err(e) => {

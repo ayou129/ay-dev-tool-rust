@@ -108,6 +108,7 @@
       - connection_info
       - ssh_manager
       - ssh_status
+      - current_prompt SSH服务器返回的 ANSI转义序列 的完整信息中的部分信息 例如macos返回的是: `(base) ➜  ~ `
       - ...
 
 ## 项目相关指令

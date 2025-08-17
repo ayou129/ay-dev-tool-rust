@@ -46,7 +46,7 @@ impl LogEntry {
 }
 
 pub struct Logger {
-    log_file_path: Option<PathBuf>,
+    pub log_file_path: Option<PathBuf>,
     console_enabled: bool,
     file_enabled: bool,
     min_level: LogLevel,
@@ -188,11 +188,12 @@ macro_rules! app_log {
 }
 
 // SSH 专用日志函数
-pub fn log_ssh_connection_attempt(host: &str, port: u16, username: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.info("SSH", &format!("尝试连接到 {}@{}:{}", username, host, port));
-    }
-}
+// 已移除 - 冗余日志，有成功/失败日志即可
+// pub fn log_ssh_connection_attempt(host: &str, port: u16, username: &str) {
+//     if let Ok(logger) = get_logger().lock() {
+//         logger.info("SSH", &format!("尝试连接到 {}@{}:{}", username, host, port));
+//     }
+// }
 
 pub fn log_ssh_connection_success(host: &str, port: u16, username: &str) {
     if let Ok(logger) = get_logger().lock() {
@@ -233,5 +234,20 @@ pub fn log_ssh_disconnection(connection: &str, reason: &str) {
 pub fn log_ssh_authentication_method(username: &str, auth_type: &str) {
     if let Ok(logger) = get_logger().lock() {
         logger.debug("SSH", &format!("用户 '{}' 使用 '{}' 认证方式", username, auth_type));
+    }
+}
+
+// ANSI 转义序列处理日志
+pub fn log_ansi_processing(original_length: usize, cleaned_length: usize, ansi_count: usize) {
+    if let Ok(logger) = get_logger().lock() {
+        logger.debug("ANSI", &format!("处理ANSI序列: 原始长度 {}, 清理后长度 {}, 发现 {} 个转义序列", 
+                     original_length, cleaned_length, ansi_count));
+    }
+}
+
+pub fn log_prompt_extraction(original_text: &str, extracted_prompt: &str) {
+    if let Ok(logger) = get_logger().lock() {
+        logger.info("ANSI", &format!("提取提示符: '{}' -> '{}'", 
+                    original_text.replace('\n', "\\n"), extracted_prompt));
     }
 }

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::ui::ConnectionConfig;
 use crate::utils::logger::{
-    log_ssh_connection_attempt, log_ssh_connection_success, log_ssh_connection_failed,
+    log_ssh_connection_success, log_ssh_connection_failed,
     log_ssh_command_execution, log_ssh_command_success, log_ssh_command_failed,
     log_ssh_disconnection, log_ssh_authentication_method
 };
@@ -29,8 +29,7 @@ impl std::fmt::Debug for SshConnection {
 
 impl SshConnection {
     pub async fn connect(config: &ConnectionConfig) -> Result<Self> {
-        // 记录连接尝试
-        log_ssh_connection_attempt(&config.host, config.port, &config.username);
+        // 移除连接尝试日志 - 冗余，有成功/失败日志即可
         
         let tcp = match TcpStream::connect(format!("{}:{}", config.host, config.port)) {
             Ok(stream) => {
@@ -145,6 +144,55 @@ impl SshConnection {
         &self.connection_info
     }
 
+    // 获取初始shell会话输出（连接后的欢迎信息和提示符）
+    pub async fn get_initial_output(&mut self) -> Result<String> {
+        let connection_id = format!("{}@{}:{}", 
+            self.connection_info.username, 
+            self.connection_info.host, 
+            self.connection_info.port);
+        
+        log_ssh_command_execution("获取初始shell输出", &connection_id);
+
+        let mut channel = self.session.channel_session()?;
+        
+        // 启动shell会话
+        channel.shell()?;
+        
+        // 等待一下让shell初始化
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        
+        // 读取初始输出
+        let mut output = String::new();
+        
+        // 等待shell输出稳定，多次尝试读取
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            
+            // 使用channel的read_to_string方法
+            let mut buffer = String::new();
+            match channel.read_to_string(&mut buffer) {
+                Ok(_) => {
+                    if !buffer.is_empty() {
+                        output.push_str(&buffer);
+                    }
+                }
+                Err(_) => break,
+            }
+            
+            // 如果读取到了内容就继续，否则停止
+            if buffer.is_empty() {
+                break;
+            }
+        }
+        
+        // 关闭通道
+        channel.close()?;
+        channel.wait_close()?;
+
+        log_ssh_command_success("获取初始shell输出", &connection_id, output.len());
+        Ok(output)
+    }
+
     // 检查TCP连接状态
     pub fn is_alive(&self) -> bool {
         // 尝试读取TCP流的状态来判断连接是否仍然活跃
@@ -219,6 +267,16 @@ impl SshManager {
             }
         } else {
             None
+        }
+    }
+
+    // 获取初始shell输出
+    pub async fn get_initial_output(&self, id: &str) -> Result<String> {
+        if let Some(connection) = self.connections.get(id) {
+            let mut conn = connection.lock().await;
+            conn.get_initial_output().await
+        } else {
+            Err(anyhow::anyhow!("连接不存在: {}", id))
         }
     }
 }

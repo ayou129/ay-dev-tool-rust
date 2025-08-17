@@ -63,11 +63,19 @@ fn main() -> eframe::Result<()> {
     env_logger::init();
     
     // 初始化全局应用日志系统
-    let _ = utils::logger::init_logger();
-    utils::logger::get_logger()
+    let logger = utils::logger::init_logger();
+    logger
         .lock()
         .unwrap()
         .info("App", "应用程序启动");
+    
+    // 记录日志文件路径
+    if let Ok(log_instance) = logger.lock() {
+        if let Some(log_path) = &log_instance.log_file_path {
+            println!("📝 日志文件路径: {:?}", log_path);
+            log::info!("日志文件路径: {:?}", log_path);
+        }
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
