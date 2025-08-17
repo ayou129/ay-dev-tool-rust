@@ -1,0 +1,3 @@
+max_width = 100       # 每行最大字符数（默认 100）
+indent_style = "Space" # 缩进用空格（默认）
+tab_spaces = 4        # 缩进空格数（默认 4）

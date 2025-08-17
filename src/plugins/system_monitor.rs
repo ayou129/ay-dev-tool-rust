@@ -4,6 +4,7 @@ use sysinfo::System;
 use std::time::{Duration, Instant};
 
 use super::Plugin;
+use crate::utils::current_timestamp;
 
 pub struct SystemMonitor {
     system: System,
@@ -72,6 +73,7 @@ impl Plugin for SystemMonitor {
         }).collect();
 
         json!({
+            "timestamp": current_timestamp(),
             "cpu": {
                 "usage_per_core": cpu_usage,
                 "average_usage": if !cpu_usage.is_empty() {

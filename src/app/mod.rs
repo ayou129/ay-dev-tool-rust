@@ -1,4 +1,5 @@
 use eframe::egui;
+use egui_phosphor::regular;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -26,9 +27,7 @@ pub struct TerminalApp {
 
 #[derive(Debug, Clone)]
 pub enum TabContent {
-    ConnectionList,
-    Terminal(TerminalPanel),
-    Settings,
+    Terminal(TerminalPanel, bool), // TerminalPanel, is_connected
 }
 
 impl TerminalApp {
@@ -42,13 +41,14 @@ impl TerminalApp {
         // 创建 SSH 管理器
         let ssh_manager = Arc::new(Mutex::new(SshManager::new()));
         
-        // 初始化 tabs
+        // 初始化 tabs - 默认创建一个显示连接列表的tab
         let mut tabs = HashMap::new();
-        tabs.insert("connections".to_string(), TabContent::ConnectionList);
+        let default_terminal = TerminalPanel::new("快速连接".to_string(), "选择或添加连接".to_string());
+        tabs.insert("tab_1".to_string(), TabContent::Terminal(default_terminal, false));
         
         Self {
             config,
-            active_tab: "connections".to_string(),
+            active_tab: "tab_1".to_string(),
             tabs,
             connection_manager: ConnectionManager::new(),
             plugins_panel: PluginsPanel::new(),
@@ -62,9 +62,7 @@ impl TerminalApp {
             // Tab 切换按钮
             for (tab_id, content) in &self.tabs {
                 let tab_name = match content {
-                    TabContent::ConnectionList => "Quick Connect",
-                    TabContent::Terminal(terminal) => &terminal.title,
-                    TabContent::Settings => "Settings",
+                    TabContent::Terminal(terminal, _) => &terminal.title,
                 };
                 
                 if ui.selectable_label(
@@ -78,24 +76,24 @@ impl TerminalApp {
             ui.separator();
             
             // 添加新终端按钮
-            if ui.button("➕").clicked() {
-                // TODO: 实现新建终端逻辑
+            if ui.button(regular::PLUS).clicked() {
+                self.create_new_tab();
             }
         });
     }
 
     fn render_main_content(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
         match self.tabs.get_mut(&self.active_tab) {
-            Some(TabContent::ConnectionList) => {
-                if let Some(connection_config) = self.connection_manager.show(ui, &mut self.config) {
-                    self.create_terminal_tab(connection_config);
+            Some(TabContent::Terminal(terminal, is_connected)) => {
+                if !*is_connected {
+                    // 显示连接列表
+                    if let Some(connection_config) = self.connection_manager.show(ui, &mut self.config) {
+                        self.connect_to_terminal(connection_config);
+                    }
+                } else {
+                    // 显示终端界面
+                    terminal.show(ui);
                 }
-            }
-            Some(TabContent::Terminal(terminal)) => {
-                terminal.show(ui);
-            }
-            Some(TabContent::Settings) => {
-                ui.label("Settings panel - Coming soon");
             }
             None => {
                 ui.label("No active tab");
@@ -104,43 +102,79 @@ impl TerminalApp {
     }
 
     fn render_side_panel(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("plugins")
+        egui::SidePanel::left("plugins")
             .default_width(300.0)
             .show(ctx, |ui| {
-                ui.heading("DevOps Plugins");
+                ui.heading("DevOps 插件");
                 ui.separator();
                 
                 self.plugins_panel.show(ui);
             });
     }
 
-    fn create_terminal_tab(&mut self, connection_config: ConnectionConfig) {
+    fn create_new_tab(&mut self) {
         // 生成唯一的 tab ID
-        let tab_id = uuid::Uuid::new_v4().to_string();
+        let tab_id = format!("tab_{}", self.tabs.len() + 1);
         
-        // 创建终端面板
-        let terminal_panel = TerminalPanel::new(
-            connection_config.name.clone(),
-            format!("{}@{}:{}", connection_config.username, connection_config.host, connection_config.port)
-        );
+        // 创建新的终端面板（未连接状态）
+        let terminal_panel = TerminalPanel::new("快速连接".to_string(), "选择或添加连接".to_string());
         
         // 添加到 tabs 中
-        self.tabs.insert(tab_id.clone(), TabContent::Terminal(terminal_panel));
-        self.active_tab = tab_id.clone();
-        
-        // 异步建立 SSH 连接
-        let ssh_manager = self.ssh_manager.clone();
-        let config = connection_config.clone();
-        self.runtime.spawn(async move {
-            match ssh_manager.lock().await.connect(tab_id.clone(), &config).await {
-                Ok(_) => {
-                    log::info!("SSH connection established for {}", config.name);
+        self.tabs.insert(tab_id.clone(), TabContent::Terminal(terminal_panel, false));
+        self.active_tab = tab_id;
+    }
+
+    fn connect_to_terminal(&mut self, connection_config: ConnectionConfig) {
+        if let Some(TabContent::Terminal(terminal, is_connected)) = self.tabs.get_mut(&self.active_tab) {
+            // 更新终端信息
+            terminal.title = connection_config.name.clone();
+            terminal.connection_info = format!("{}@{}:{}", connection_config.username, connection_config.host, connection_config.port);
+            
+            // 显示连接过程
+            terminal.add_output(format!("正在连接到 {}@{}:{}...", 
+                connection_config.username, connection_config.host, connection_config.port));
+            
+            // 设置SSH管理器
+            terminal.set_ssh_manager(self.ssh_manager.clone(), self.active_tab.clone());
+            
+            // 异步建立 SSH 连接
+            let ssh_manager = self.ssh_manager.clone();
+            let config = connection_config.clone();
+            let tab_id = self.active_tab.clone();
+            
+            // 获取终端的命令发送器来通知连接结果
+            let command_sender = terminal.get_command_sender();
+            
+            // 先尝试连接
+            self.runtime.spawn(async move {
+                match ssh_manager.lock().await.connect(tab_id.clone(), &config).await {
+                    Ok(_) => {
+                        log::info!("SSH connection established for {}", config.name);
+                        // 连接成功，发送成功消息
+                        if let Some(sender) = command_sender {
+                            let _ = sender.send(crate::ui::terminal_panel::CommandResult {
+                                command: "connect".to_string(),
+                                output: Ok(format!("成功连接到 {}@{}:{}", config.username, config.host, config.port)),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to establish SSH connection: {}", e);
+                        // 连接失败，发送错误消息
+                        if let Some(sender) = command_sender {
+                            let _ = sender.send(crate::ui::terminal_panel::CommandResult {
+                                command: "connect".to_string(),
+                                output: Err(format!("连接失败: {}", e)),
+                            });
+                        }
+                    }
                 }
-                Err(e) => {
-                    log::error!("Failed to establish SSH connection: {}", e);
-                }
-            }
-        });
+            });
+
+            // 设置为连接状态（实际状态会通过SSH结果更新）
+            *is_connected = true;
+            terminal.set_connected(true);
+        }
     }
 }
 

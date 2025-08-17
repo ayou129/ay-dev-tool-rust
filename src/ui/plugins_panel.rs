@@ -1,16 +1,19 @@
 use eframe::egui;
+use egui_phosphor::regular;
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::VecDeque;
-use crate::plugins::{system_monitor::SystemMonitor, software_detector::SoftwareDetector, Plugin};
-use crate::utils::{format_bytes, format_percentage};
+use crate::plugins::{system_monitor::SystemMonitor, software_detector::SoftwareDetector, file_browser::FileBrowser, Plugin};
+use crate::utils::{format_bytes, format_percentage, truncate_string};
 
 pub struct PluginsPanel {
     system_monitor: SystemMonitor,
     software_detector: SoftwareDetector,
+    file_browser: FileBrowser,
     cpu_history: VecDeque<f64>,
     memory_history: VecDeque<f64>,
     show_system_monitor: bool,
     show_software_list: bool,
+    show_file_browser: bool,
 }
 
 impl PluginsPanel {
@@ -18,33 +21,45 @@ impl PluginsPanel {
         Self {
             system_monitor: SystemMonitor::new(1000), // 1秒更新
             software_detector: SoftwareDetector::new(),
+            file_browser: FileBrowser::new(),
             cpu_history: VecDeque::with_capacity(100),
             memory_history: VecDeque::with_capacity(100),
             show_system_monitor: true,
             show_software_list: false,
+            show_file_browser: false,
         }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         // 系统监控开关
-        ui.checkbox(&mut self.show_system_monitor, "启用系统监控");
+        ui.checkbox(&mut self.show_system_monitor, format!("启用{} ({})", 
+                   self.system_monitor.name(), 
+                   if self.system_monitor.is_enabled() { "可用" } else { "不可用" }));
         
         if self.show_system_monitor {
-            ui.collapsing("📊 系统监控", |ui| {
+            ui.collapsing(format!("{} 系统监控", regular::CHART_LINE), |ui| {
                 self.show_system_monitor_panel(ui);
             });
         }
         
-        ui.collapsing("📁 文件浏览器", |ui| {
-            ui.label("文件浏览器 - 开发中");
-            ui.small("将显示当前连接的远程目录结构");
-        });
+        // 文件浏览器开关
+        ui.checkbox(&mut self.show_file_browser, format!("启用{} ({})", 
+                   self.file_browser.name(), 
+                   if self.file_browser.is_enabled() { "可用" } else { "不可用" }));
+        
+        if self.show_file_browser {
+            ui.collapsing(format!("{} 文件浏览器", regular::FOLDER), |ui| {
+                self.show_file_browser_panel(ui);
+            });
+        }
         
         // 软件检测开关
-        ui.checkbox(&mut self.show_software_list, "启用软件检测");
+        ui.checkbox(&mut self.show_software_list, format!("启用{} ({})", 
+                   self.software_detector.name(), 
+                   if self.software_detector.is_enabled() { "可用" } else { "不可用" }));
         
         if self.show_software_list {
-            ui.collapsing("⚙️ 软件检测", |ui| {
+            ui.collapsing(format!("{} 软件检测", regular::GEAR), |ui| {
                 self.show_software_panel(ui);
             });
         }
@@ -147,13 +162,16 @@ impl PluginsPanel {
     }
 
     fn show_software_panel(&mut self, ui: &mut egui::Ui) {
-        if ui.button("🔍 检测软件").clicked() {
-            // 启动软件检测
-            let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                self.software_detector.initialize().await?;
-                self.software_detector.update().await
-            });
-        }
+        ui.horizontal(|ui| {
+            ui.label(regular::MAGNIFYING_GLASS);
+            if ui.button("检测软件").clicked() {
+                // 启动软件检测
+                let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                    self.software_detector.initialize().await?;
+                    self.software_detector.update().await
+                });
+            }
+        });
         
         let data = self.software_detector.render_data();
         
@@ -167,9 +185,9 @@ impl PluginsPanel {
                 
                 ui.horizontal(|ui| {
                     let (icon, color) = if installed {
-                        ("✅", egui::Color32::GREEN)
+                        (regular::CHECK_CIRCLE, egui::Color32::GREEN)
                     } else {
-                        ("❌", egui::Color32::RED)
+                        (regular::X_CIRCLE, egui::Color32::RED)
                     };
                     
                     ui.colored_label(color, icon);
@@ -181,9 +199,12 @@ impl PluginsPanel {
                     
                     if !installed {
                         if let Some(install_cmd) = software["install_command"].as_str() {
-                            if ui.small_button("📥").on_hover_text(install_cmd).clicked() {
-                                // TODO: 执行安装命令
-                            }
+                            ui.horizontal(|ui| {
+                                ui.label(regular::DOWNLOAD);
+                                if ui.small_button("安装").on_hover_text(install_cmd).clicked() {
+                                    // TODO: 执行安装命令
+                                }
+                            });
                         }
                     }
                 });
@@ -202,6 +223,69 @@ impl PluginsPanel {
                     ui.label(format!("{}", summary["total_count"].as_u64().unwrap_or(0)));
                 });
             }
+        }
+    }
+
+    fn show_file_browser_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(regular::ARROW_CLOCKWISE);
+            if ui.button("刷新").clicked() {
+                let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                    self.file_browser.initialize().await?;
+                    self.file_browser.update().await
+                });
+            }
+        });
+        
+        let data = self.file_browser.render_data();
+        
+        ui.horizontal(|ui| {
+            ui.label("当前路径:");
+            ui.small(data["current_path"].as_str().unwrap_or("/"));
+        });
+        
+        ui.separator();
+        
+        if let Some(files) = data["files"].as_array() {
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                for file in files {
+                    let name = file["name"].as_str().unwrap_or("Unknown");
+                    let is_directory = file["is_directory"].as_bool().unwrap_or(false);
+                    let size = file["size"].as_u64().unwrap_or(0);
+                    
+                    ui.horizontal(|ui| {
+                        let icon = if is_directory { regular::FOLDER } else { regular::FILE };
+                        
+                        if is_directory {
+                            ui.horizontal(|ui| {
+                                ui.label(icon);
+                                if ui.button(truncate_string(name, 25)).clicked() {
+                                    // 导航到目录
+                                    let mut new_path = std::path::PathBuf::from(data["current_path"].as_str().unwrap_or("/"));
+                                    new_path.push(name);
+                                    self.file_browser.set_path(new_path);
+                                    let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
+                                        self.file_browser.update().await
+                                    });
+                                }
+                            });
+                        } else {
+                            ui.label(icon);
+                            ui.label(truncate_string(name, 25));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.small(format!("{} bytes", size));
+                            });
+                        }
+                    });
+                }
+            });
+            
+            ui.horizontal(|ui| {
+                ui.label("文件数量:");
+                ui.label(format!("{}", data["file_count"].as_u64().unwrap_or(0)));
+            });
+        } else {
+            ui.label("无法读取目录内容");
         }
     }
 }

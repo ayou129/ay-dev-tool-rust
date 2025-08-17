@@ -14,6 +14,14 @@ pub struct SshConnection {
     connection_info: ConnectionConfig,
 }
 
+impl std::fmt::Debug for SshConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConnection")
+            .field("connection_info", &self.connection_info)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SshConnection {
     pub async fn connect(config: &ConnectionConfig) -> Result<Self> {
         let tcp = TcpStream::connect(format!("{}:{}", config.host, config.port))?;
@@ -62,6 +70,7 @@ impl SshConnection {
     }
 }
 
+#[derive(Debug)]
 pub struct SshManager {
     connections: HashMap<String, Arc<Mutex<SshConnection>>>,
 }
