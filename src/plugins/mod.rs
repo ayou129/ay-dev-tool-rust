@@ -1,6 +1,6 @@
-pub mod system_monitor;
 pub mod file_browser;
 pub mod software_detector;
+pub mod system_monitor;
 
 use anyhow::Result;
 

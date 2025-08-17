@@ -28,7 +28,7 @@ impl SshConnection {
         let mut session = Session::new()?;
         session.set_tcp_stream(tcp.try_clone()?);
         session.handshake()?;
-        
+
         // 根据认证类型进行认证
         match &config.auth_type {
             crate::ui::AuthType::Password => {
@@ -40,7 +40,12 @@ impl SshConnection {
             }
             crate::ui::AuthType::PublicKey => {
                 if let Some(key_file) = &config.key_file {
-                    session.userauth_pubkey_file(&config.username, None, key_file.as_ref(), None)?;
+                    session.userauth_pubkey_file(
+                        &config.username,
+                        None,
+                        key_file.as_ref(),
+                        None,
+                    )?;
                 } else {
                     return Err(anyhow::anyhow!("公钥认证需要私钥文件"));
                 }
@@ -57,18 +62,18 @@ impl SshConnection {
     pub async fn execute_command(&mut self, command: &str) -> Result<String> {
         let mut channel = self.session.channel_session()?;
         channel.exec(command)?;
-        
+
         let mut output = String::new();
         channel.read_to_string(&mut output)?;
         channel.wait_close()?;
-        
+
         Ok(output)
     }
 
     pub fn get_info(&self) -> &ConnectionConfig {
         &self.connection_info
     }
-    
+
     // 检查TCP连接状态
     pub fn is_alive(&self) -> bool {
         // 尝试读取TCP流的状态来判断连接是否仍然活跃
@@ -91,7 +96,8 @@ impl SshManager {
 
     pub async fn connect(&mut self, id: String, config: &ConnectionConfig) -> Result<()> {
         let connection = SshConnection::connect(config).await?;
-        self.connections.insert(id, Arc::new(Mutex::new(connection)));
+        self.connections
+            .insert(id, Arc::new(Mutex::new(connection)));
         Ok(())
     }
 
@@ -125,7 +131,7 @@ impl SshManager {
     pub fn get_connections(&self) -> Vec<String> {
         self.connections.keys().cloned().collect()
     }
-    
+
     // 获取连接信息
     pub fn get_connection_info(&self, id: &str) -> Option<ConnectionConfig> {
         if let Some(connection) = self.connections.get(id) {

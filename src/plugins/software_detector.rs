@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -27,16 +27,66 @@ impl SoftwareDetector {
 
     async fn detect_software(&mut self) -> Result<()> {
         let software_list = vec![
-            ("php", "php --version", Some("apt install php"), Some("https://php.net")),
-            ("mysql", "mysql --version", Some("apt install mysql-server"), Some("https://mysql.com")),
-            ("redis", "redis-server --version", Some("apt install redis-server"), Some("https://redis.io")),
-            ("docker", "docker --version", Some("apt install docker.io"), Some("https://docker.com")),
-            ("node", "node --version", Some("apt install nodejs"), Some("https://nodejs.org")),
-            ("python", "python --version", Some("apt install python3"), Some("https://python.org")),
-            ("python3", "python3 --version", Some("apt install python3"), Some("https://python.org")),
-            ("conda", "conda --version", None, Some("https://anaconda.com")),
-            ("nvcc", "nvcc --version", None, Some("https://developer.nvidia.com/cuda-downloads")),
-            ("nvidia-smi", "nvidia-smi", None, Some("https://nvidia.com/drivers")),
+            (
+                "php",
+                "php --version",
+                Some("apt install php"),
+                Some("https://php.net"),
+            ),
+            (
+                "mysql",
+                "mysql --version",
+                Some("apt install mysql-server"),
+                Some("https://mysql.com"),
+            ),
+            (
+                "redis",
+                "redis-server --version",
+                Some("apt install redis-server"),
+                Some("https://redis.io"),
+            ),
+            (
+                "docker",
+                "docker --version",
+                Some("apt install docker.io"),
+                Some("https://docker.com"),
+            ),
+            (
+                "node",
+                "node --version",
+                Some("apt install nodejs"),
+                Some("https://nodejs.org"),
+            ),
+            (
+                "python",
+                "python --version",
+                Some("apt install python3"),
+                Some("https://python.org"),
+            ),
+            (
+                "python3",
+                "python3 --version",
+                Some("apt install python3"),
+                Some("https://python.org"),
+            ),
+            (
+                "conda",
+                "conda --version",
+                None,
+                Some("https://anaconda.com"),
+            ),
+            (
+                "nvcc",
+                "nvcc --version",
+                None,
+                Some("https://developer.nvidia.com/cuda-downloads"),
+            ),
+            (
+                "nvidia-smi",
+                "nvidia-smi",
+                None,
+                Some("https://nvidia.com/drivers"),
+            ),
         ];
 
         for (name, check_cmd, install_cmd, download_url) in software_list {
@@ -45,9 +95,7 @@ impl SoftwareDetector {
                 continue;
             }
 
-            let result = Command::new(parts[0])
-                .args(&parts[1..])
-                .output();
+            let result = Command::new(parts[0]).args(&parts[1..]).output();
 
             let (installed, version) = match result {
                 Ok(output) if output.status.success() => {
@@ -57,13 +105,16 @@ impl SoftwareDetector {
                 _ => (false, None),
             };
 
-            self.detected_software.insert(name.to_string(), SoftwareInfo {
-                name: name.to_string(),
-                version,
-                installed,
-                install_command: install_cmd.map(|s| s.to_string()),
-                download_url: download_url.map(|s| s.to_string()),
-            });
+            self.detected_software.insert(
+                name.to_string(),
+                SoftwareInfo {
+                    name: name.to_string(),
+                    version,
+                    installed,
+                    install_command: install_cmd.map(|s| s.to_string()),
+                    download_url: download_url.map(|s| s.to_string()),
+                },
+            );
         }
 
         Ok(())
@@ -90,18 +141,26 @@ impl Plugin for SoftwareDetector {
     }
 
     fn render_data(&self) -> Value {
-        let software: Vec<Value> = self.detected_software.values().map(|info| {
-            json!({
-                "name": info.name,
-                "version": info.version,
-                "installed": info.installed,
-                "install_command": info.install_command,
-                "download_url": info.download_url,
-                "status": if info.installed { "installed" } else { "not_installed" }
+        let software: Vec<Value> = self
+            .detected_software
+            .values()
+            .map(|info| {
+                json!({
+                    "name": info.name,
+                    "version": info.version,
+                    "installed": info.installed,
+                    "install_command": info.install_command,
+                    "download_url": info.download_url,
+                    "status": if info.installed { "installed" } else { "not_installed" }
+                })
             })
-        }).collect();
+            .collect();
 
-        let installed_count = self.detected_software.values().filter(|info| info.installed).count();
+        let installed_count = self
+            .detected_software
+            .values()
+            .filter(|info| info.installed)
+            .count();
         let total_count = self.detected_software.len();
 
         json!({

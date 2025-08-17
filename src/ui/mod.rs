@@ -1,13 +1,12 @@
 pub mod connection_manager;
-pub mod terminal_panel;
 pub mod plugins_panel;
-
+pub mod terminal_panel;
 
 use serde::{Deserialize, Serialize};
 
 pub use connection_manager::ConnectionManager;
-pub use terminal_panel::TerminalPanel;
 pub use plugins_panel::PluginsPanel;
+pub use terminal_panel::TerminalPanel;
 
 // SSH 连接配置
 #[derive(Debug, Clone, Serialize, Deserialize)]

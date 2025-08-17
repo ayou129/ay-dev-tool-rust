@@ -1,7 +1,7 @@
 use anyhow::Result;
-use serde_json::{json, Value};
-use sysinfo::System;
+use serde_json::{Value, json};
 use std::time::{Duration, Instant};
+use sysinfo::System;
 
 use super::Plugin;
 use crate::utils::current_timestamp;
@@ -52,7 +52,12 @@ impl Plugin for SystemMonitor {
     }
 
     fn render_data(&self) -> Value {
-        let cpu_usage: Vec<f32> = self.system.cpus().iter().map(|cpu| cpu.cpu_usage()).collect();
+        let cpu_usage: Vec<f32> = self
+            .system
+            .cpus()
+            .iter()
+            .map(|cpu| cpu.cpu_usage())
+            .collect();
         let memory_used = self.system.used_memory();
         let memory_total = self.system.total_memory();
         let swap_used = self.system.used_swap();
