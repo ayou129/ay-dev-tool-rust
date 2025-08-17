@@ -59,7 +59,15 @@ fn setup_custom_fonts(ctx: &egui::Context) {
 }
 
 fn main() -> eframe::Result<()> {
+    // 初始化环境日志
     env_logger::init();
+    
+    // 初始化全局应用日志系统
+    let _ = utils::logger::init_logger();
+    utils::logger::get_logger()
+        .lock()
+        .unwrap()
+        .info("App", "应用程序启动");
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

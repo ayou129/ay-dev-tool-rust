@@ -91,9 +91,12 @@ impl TerminalApp {
 
     fn render_main_content(&mut self, _ctx: &egui::Context, ui: &mut egui::Ui) {
         match self.tabs.get_mut(&self.active_tab) {
-            Some(TabContent::Terminal(terminal, is_connected)) => {
-                if !*is_connected {
-                    // 显示连接列表
+            Some(TabContent::Terminal(terminal, _tab_is_connected)) => {
+                // 使用 tab_id 判断是否已连接，有值就显示终端界面
+                let has_connection = terminal.tab_id.is_some();
+                
+                if !has_connection {
+                    // 显示连接列表（快速连接界面）
                     if let Some(connection_config) =
                         self.connection_manager.show(ui, &mut self.config)
                     {
@@ -146,7 +149,7 @@ impl TerminalApp {
     }
 
     fn connect_to_terminal(&mut self, connection_config: ConnectionConfig) {
-        if let Some(TabContent::Terminal(terminal, is_connected)) =
+        if let Some(TabContent::Terminal(terminal, _is_connected)) =
             self.tabs.get_mut(&self.active_tab)
         {
             // 更新终端信息
@@ -162,7 +165,7 @@ impl TerminalApp {
                 connection_config.username, connection_config.host, connection_config.port
             ));
 
-            // 设置SSH管理器
+            // 设置SSH管理器和tab_id（立即切换到终端界面）
             terminal.set_ssh_manager(self.ssh_manager.clone(), self.active_tab.clone());
 
             // 异步建立 SSH 连接
@@ -182,34 +185,30 @@ impl TerminalApp {
                     .await
                 {
                     Ok(_) => {
-                        log::info!("SSH connection established for {}", config.name);
                         // 连接成功，发送成功消息
                         if let Some(sender) = command_sender {
                             let _ = sender.send(crate::ui::terminal_panel::CommandResult {
-                                command: "connect".to_string(),
+                                command: "connect_success".to_string(),
                                 output: Ok(format!(
-                                    "成功连接到 {}@{}:{}",
+                                    "✅ 成功连接到 {}@{}:{}\n欢迎使用终端！",
                                     config.username, config.host, config.port
                                 )),
                             });
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to establish SSH connection: {}", e);
                         // 连接失败，发送错误消息
                         if let Some(sender) = command_sender {
                             let _ = sender.send(crate::ui::terminal_panel::CommandResult {
-                                command: "connect".to_string(),
-                                output: Err(format!("连接失败: {}", e)),
+                                command: "connect_failed".to_string(),
+                                output: Err(format!("❌ 连接失败: {}\n\n请检查:\n• 主机地址和端口是否正确\n• 用户名和密码是否正确\n• 网络连接是否正常\n• 目标主机SSH服务是否启用", e)),
                             });
                         }
                     }
                 }
             });
 
-            // 设置为连接状态（实际状态会通过SSH结果更新）
-            *is_connected = true;
-            terminal.set_connected(true);
+            // 注意：不在这里设置连接状态，而是在收到连接结果后设置
         }
     }
 }

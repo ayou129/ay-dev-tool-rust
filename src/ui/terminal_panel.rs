@@ -13,9 +13,9 @@ pub struct TerminalPanel {
     pub output_buffer: VecDeque<String>,
     input_buffer: String,
     scroll_to_bottom: bool,
-    is_connected: bool,
+    pub is_connected: bool,
     ssh_manager: Option<Arc<Mutex<SshManager>>>,
-    connection_id: Option<String>,
+    pub tab_id: Option<String>,
     command_receiver: Option<mpsc::UnboundedReceiver<CommandResult>>,
     command_sender: Option<mpsc::UnboundedSender<CommandResult>>,
 }
@@ -40,7 +40,7 @@ impl Clone for TerminalPanel {
             scroll_to_bottom: self.scroll_to_bottom,
             is_connected: self.is_connected,
             ssh_manager: self.ssh_manager.clone(),
-            connection_id: self.connection_id.clone(),
+            tab_id: self.tab_id.clone(),
             command_receiver: Some(receiver),
             command_sender: Some(sender),
         }
@@ -62,15 +62,16 @@ impl TerminalPanel {
             scroll_to_bottom: true,
             is_connected: false,
             ssh_manager: None,
-            connection_id: None,
+            tab_id: None,
             command_receiver: Some(receiver),
             command_sender: Some(sender),
         }
     }
 
-    pub fn set_ssh_manager(&mut self, ssh_manager: Arc<Mutex<SshManager>>, connection_id: String) {
+    // 设置SSH管理器和tab_id（点击连接时立即调用）
+    pub fn set_ssh_manager(&mut self, ssh_manager: Arc<Mutex<SshManager>>, tab_id: String) {
         self.ssh_manager = Some(ssh_manager);
-        self.connection_id = Some(connection_id);
+        self.tab_id = Some(tab_id);  // 立即设置tab_id，用于区分展示方式
     }
 
     pub fn get_command_sender(&self) -> Option<mpsc::UnboundedSender<CommandResult>> {
@@ -79,9 +80,9 @@ impl TerminalPanel {
 
     // 更新连接信息显示
     pub fn update_connection_info(&mut self) {
-        if let (Some(ssh_manager), Some(connection_id)) = (&self.ssh_manager, &self.connection_id) {
+        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
             if let Ok(manager) = ssh_manager.try_lock() {
-                if let Some(info) = manager.get_connection_info(connection_id) {
+                if let Some(info) = manager.get_connection_info(tab_id) {
                     self.connection_info = format!("{}@{}:{}", info.username, info.host, info.port);
                 }
             }
@@ -99,15 +100,7 @@ impl TerminalPanel {
         self.scroll_to_bottom = true;
     }
 
-    pub fn set_connected(&mut self, connected: bool) {
-        self.is_connected = connected;
-        if connected {
-            // 使用 execute_ssh_command 显示连接成功的欢迎信息
-            self.execute_ssh_command("connect", "连接成功! 终端已就绪.");
-        } else {
-            self.add_output("连接断开".to_string());
-        }
-    }
+
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         // 检查是否有命令结果需要处理
@@ -141,10 +134,9 @@ impl TerminalPanel {
                         )
                         .clicked()
                     {
-                        // 先断开现有连接
+                        // 断开连接，回到快速连接界面
                         self.disconnect();
-                        self.add_output("正在重新连接...".to_string());
-                        // TODO: 这里应该触发重新连接逻辑
+                        self.add_output("已断开连接，请重新选择连接配置".to_string());
                     }
 
                     if ui
@@ -222,19 +214,50 @@ impl TerminalPanel {
         }
 
         for result in results {
-            // 显示执行的命令
-            if !result.command.trim().is_empty() {
-                self.add_output(format!("$ {}", result.command));
-            }
-
-            match result.output {
-                Ok(output) => {
-                    if !output.trim().is_empty() {
+            // 特殊处理连接相关的命令
+            match result.command.as_str() {
+                "connect_success" => {
+                    // 连接成功，设置连接状态并显示欢迎信息
+                    self.is_connected = true;
+                    if let Ok(output) = result.output {
                         self.add_output(output);
                     }
                 }
-                Err(error) => {
-                    self.add_output(format!("错误: {}", error));
+                "connect_failed" => {
+                    // 连接失败，清除连接状态并显示错误信息
+                    self.is_connected = false;
+                    self.tab_id = None;  // 清除tab_id，回到快速连接界面
+                    self.ssh_manager = None;    // 清除SSH管理器
+                    if let Err(error) = result.output {
+                        self.add_output(error.clone());
+                    }
+                }
+                "connect" => {
+                    // 兼容老的连接命令格式
+                    match result.output {
+                        Ok(output) => {
+                            self.is_connected = true;
+                            self.add_output(output);
+                        }
+                        Err(error) => {
+                            self.is_connected = false;
+                            self.add_output(format!("连接错误: {}", error));
+                        }
+                    }
+                }
+                _ => {
+                    // 普通命令处理
+                    // 注意：命令已在execute_command中显示，这里只显示结果
+                    match result.output {
+                        Ok(output) => {
+                            if !output.trim().is_empty() {
+                                self.add_output(output);
+                            }
+                        }
+                        Err(error) => {
+                            self.add_output(format!("错误: {}", error));
+                        }
+                    }
                 }
             }
         }
@@ -252,10 +275,10 @@ impl TerminalPanel {
 
             self.add_output(format!("$ {}", command));
 
-            if self.is_connected && self.ssh_manager.is_some() && self.connection_id.is_some() {
+            if self.is_connected && self.ssh_manager.is_some() && self.tab_id.is_some() {
                 // 使用真正的SSH连接执行命令
                 let ssh_manager = self.ssh_manager.clone().unwrap();
-                let connection_id = self.connection_id.clone().unwrap();
+                let tab_id = self.tab_id.clone().unwrap();
                 let cmd = command.trim().to_string();
                 let sender = self.command_sender.clone();
 
@@ -264,7 +287,7 @@ impl TerminalPanel {
                     let result = match ssh_manager
                         .lock()
                         .await
-                        .execute_command(&connection_id, &cmd)
+                        .execute_command(&tab_id, &cmd)
                         .await
                     {
                         Ok(output) => {
@@ -296,19 +319,14 @@ impl TerminalPanel {
         }
     }
 
-    // 提供SSH命令执行的接口，用于直接添加命令执行结果
-    pub fn execute_ssh_command(&mut self, command: &str, result: &str) {
-        // 显示执行的命令和结果
-        self.add_output(format!("$ {}", command));
-        self.add_output(result.to_string());
-    }
+
 
     // 检查连接状态
     pub fn check_connection_status(&self) -> bool {
-        if let (Some(ssh_manager), Some(connection_id)) = (&self.ssh_manager, &self.connection_id) {
+        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
             // 尝试获取锁来检查连接状态
             if let Ok(manager) = ssh_manager.try_lock() {
-                manager.is_connected(connection_id)
+                manager.is_connected(tab_id)
             } else {
                 self.is_connected
             }
@@ -321,15 +339,17 @@ impl TerminalPanel {
     pub fn disconnect(&mut self) {
         let mut should_disconnect = false;
 
-        if let (Some(ssh_manager), Some(connection_id)) = (&self.ssh_manager, &self.connection_id) {
+        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
             if let Ok(mut manager) = ssh_manager.try_lock() {
-                manager.disconnect(connection_id);
+                manager.disconnect(tab_id);
                 should_disconnect = true;
             }
         }
 
         if should_disconnect {
             self.is_connected = false;
+            self.tab_id = None;  // 清除tab_id，回到快速连接界面
+            self.ssh_manager = None;    // 清除SSH管理器
             self.add_output("连接已断开".to_string());
         }
     }
