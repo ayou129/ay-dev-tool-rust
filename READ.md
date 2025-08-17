@@ -1,7 +1,7 @@
 
 ## 项目介绍
 
-当前的APP是一个类似 warp 的 跨平台(Windows/Macos)的终端工具，主要面向的是开发者。
+当前的APP是一个类似 warp 的 跨平台(Windows/Macos)的桌面应用，核心是一个终端工具，主要面向的是开发者。
 核心功能除了终端的基本功能之外(同步用户配置功能(该功能后期添加))，还额外提供一些插件:
 
 - 核心功能
@@ -54,10 +54,36 @@
 
 ## 项目实现框架
 
+### 核心技术栈
+
 框架选择： Rust + Ratatui
-实现之前的要求：
+🛠️ 核心技术栈
+
+1. UI 层
+    - UI 层：Ratatui + crossterm 实现终端 UI（tab 列表、输入/输出区域），unicode-width 处理中文字符，eframe/egui 实现性能监控（折线图）和软件列表（表格）。
+    - 使用线程（std::thread 或 tokio）管理 Ratatui 和 egui 窗口。
+2. 网络/SSH 层
+   - tokio - 异步运行时（SSH 连接、命令执行）。
+   - ssh2 - SSH 连接（密码/公钥）。
+   - tokio-util - 异步数据流处理。
+   - 错误处理：支持断线重连（3 次重试），处理连接失败/超时。
+3. 系统监控层
+   - sysinfo - 获取 CPU/内存/磁盘/网速。
+   - tokio::time - 定时刷新（1s/5s）。
+   - 可选：pnet 增强网速监控。
+4. 数据处理层
+   - serde + serde_json - JSON 配置（终端列表：name, host, port, auth, remark）。
+   - dirs - 用户目录（如 ~/.config/dev-tool）。
+   - uuid - 会话 ID。
+5. 跨平台
+   - std::env::consts::OS 适配本地命令（brew vs. winget）。
+   - Windows 支持 WSL 检测。
+
+### 实现之前的要求
 
 1. 使用 cargo install cargo-edit + cargo upgrade 来升级依赖，必要时使用 cargo upgrade --incompatible
+2. 安装依赖的时候 应该首选不冲突且版本最新的为主 也就是 cargo add xxxx
+3. 最重要的一点：实现的时候 在功能合理的前提下，代码一定要符合设计模式，例如单一职责
 
 ## 项目相关指令
 
