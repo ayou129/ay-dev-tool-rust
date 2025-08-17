@@ -1,7 +1,9 @@
 
-框架选择： Rust + Ratatui 
+## 项目介绍
+
 当前的APP是一个类似 warp 的 跨平台(Windows/Macos)的终端工具，主要面向的是开发者。
 核心功能除了终端的基本功能之外(同步用户配置功能(该功能后期添加))，还额外提供一些插件:
+
 - 核心功能
   - 基础 ssh 功能
     - 主要布局
@@ -49,6 +51,15 @@
       - 未安装时的安装引导
         - 提示安装命令 或 下载连接
       - 支持扩展,允许用户自定义检测软件列表如通过配置文件(后期迭代再实现，这里不做深入)
+
+## 项目实现框架
+
+框架选择： Rust + Ratatui
+实现之前的要求：
+
+1. 使用 cargo install cargo-edit + cargo upgrade 来升级依赖，必要时使用 cargo upgrade --incompatible
+
+## 项目相关指令
 
 ~~~sh
 cargo init ay-dev-tool-rust --bin
