@@ -4,3 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.99"
+crossterm = "0.29.0"
+dirs = "6.0.0"
+eframe = "0.32.1"
+egui = "0.32.1"
+egui_extras = { version = "0.32.1", features = ["svg", "image", "file", "serde"] }
+egui_plot = "0.33.0"
+env_logger = "0.11.8"
+log = "0.4.27"
+ratatui = "0.29.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+ssh2 = "0.9.5"
+sysinfo = "0.37.0"
+thiserror = "2.0.15"
+tokio = { version = "1.47.1", features = ["full"] }
+tokio-util = "0.7.16"
+uuid = { version = "1.18.0", features = ["v4"] }
