@@ -261,7 +261,87 @@ impl TerminalPanel {
 
 
 
-    // 渲染单个终端片段（基于VT100属性）
+    // 改进的字符网格方案：增加间距并保持颜色
+    fn render_terminal_line_grid_improved(&self, ui: &mut egui::Ui, line: &TerminalLine) {
+        if line.is_empty() {
+            return;
+        }
+
+        // 计算等宽字体的字符尺寸
+        let font_id = egui::FontId::monospace(14.0);
+        let char_size = ui.fonts(|f| {
+            let galley = f.layout_no_wrap(" ".to_string(), font_id.clone(), egui::Color32::BLACK);
+            egui::Vec2::new(galley.size().x, galley.size().y)
+        });
+
+        // 创建专门的终端样式，完全控制间距
+        let original_spacing = ui.spacing().clone();
+        ui.spacing_mut().item_spacing.x = 0.0; // 完全消除间距
+        ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
+        ui.spacing_mut().indent = 0.0;
+        
+        ui.horizontal(|ui| {
+            for segment in &line.segments {
+                if segment.text.is_empty() {
+                    continue;
+                }
+                
+                // 计算这个segment应该占据的宽度
+                let segment_width = segment.text.chars().count() as f32 * char_size.x;
+                
+                // 确定颜色
+                let text_color = if let Some(color) = segment.color {
+                    color
+                } else {
+                    egui::Color32::BLACK
+                };
+                
+                // 处理反显效果
+                let (final_color, bg_color) = if segment.inverse {
+                    (egui::Color32::WHITE, Some(egui::Color32::BLACK))
+                } else {
+                    (text_color, segment.background_color)
+                };
+                
+                // 创建带颜色的RichText
+                let mut rich_text = egui::RichText::new(&segment.text)
+                    .font(font_id.clone())
+                    .color(final_color);
+                
+                // 应用背景色
+                if let Some(bg_color) = bg_color {
+                    rich_text = rich_text.background_color(bg_color);
+                }
+                
+                // 应用文本样式
+                if segment.bold {
+                    rich_text = rich_text.strong();
+                }
+                if segment.italic {
+                    rich_text = rich_text.italics();
+                }
+                if segment.underline {
+                    rich_text = rich_text.underline();
+                }
+                
+                // 使用固定宽度的可选择Label
+                ui.add_sized(
+                    [segment_width, char_size.y],
+                    egui::Label::new(rich_text).selectable(true)
+                );
+                
+                // 在segment之间手动添加一点间距（只对空格segment添加）
+                if segment.text.trim().is_empty() && segment.text.len() > 0 {
+                    ui.add_space(1.0); // 给空格segment增加1像素间距
+                }
+            }
+        });
+        
+        // 恢复原始样式
+        *ui.spacing_mut() = original_spacing;
+    }
+
+    // 渲染单个终端片段（基于VT100属性）- 使用Label但精确控制
     fn render_terminal_segment(&self, ui: &mut egui::Ui, segment: &TerminalSegment) {
         if segment.text.is_empty() {
             return;
@@ -321,8 +401,10 @@ impl TerminalPanel {
                 .color(egui::Color32::BLACK);
         }
 
-        // 渲染标签（使用等宽字体，确保列对齐）
-        ui.add(egui::Label::new(rich_text));
+        // 使用Label，但确保不会自动换行和截断
+        let label = egui::Label::new(rich_text)
+            .selectable(false);
+        ui.add(label);
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -338,11 +420,11 @@ impl TerminalPanel {
                 dark_mode: false,
                 panel_fill: egui::Color32::WHITE,
                 window_fill: egui::Color32::WHITE,
-                override_text_color: Some(egui::Color32::BLACK),
+                override_text_color: None, // ✅ 不覆盖文本颜色，保持VT100颜色
                 ..ui.style().visuals.clone()
             },
             spacing: egui::style::Spacing {
-                item_spacing: egui::vec2(8.0, 6.0),
+                item_spacing: egui::vec2(0.0, 6.0), // ✅ 水平间距设为0，保持对齐
                 button_padding: egui::vec2(16.0, 8.0),
                 indent: 20.0,
                 ..ui.style().spacing.clone()
@@ -474,9 +556,17 @@ impl TerminalPanel {
             );
             ui.painter().rect_filled(rect.shrink(1.0), egui::CornerRadius::same(4), terminal_bg_color);
 
-            // 右键菜单（不再占用布局空间）
+            // 右键菜单和点击处理（不再占用布局空间）
             let area_id = ui.id().with("terminal_area");
             let response = ui.interact(rect, area_id, egui::Sense::click());
+            
+            // 左键点击取消全选
+            if response.clicked() {
+                if self.is_all_selected {
+                    self.is_all_selected = false;
+                }
+            }
+            
             response.context_menu(|ui| {
                 ui.set_style(std::sync::Arc::new(egui::Style {
                     visuals: egui::Visuals {
@@ -510,9 +600,10 @@ impl TerminalPanel {
                 }
             });
 
-            // 现代化边距和滚动（轻主题右键菜单样式）
+            // 现代化边距和滚动（轻主题右键菜单样式）- 增加外边距
             egui::Frame::NONE
-                .inner_margin(egui::Margin::symmetric(20, 16))
+                .inner_margin(egui::Margin::symmetric(24, 20)) // 增加外边距
+                .outer_margin(egui::Margin::symmetric(8, 6))   // 添加外边距
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(true)
@@ -546,33 +637,91 @@ impl TerminalPanel {
                                 };
 
                                 for terminal_line in before_anchor {
+                                    // 使用segment渲染保持颜色，配合修复的全局样式
                                     ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        ui.spacing_mut().item_spacing.x = 0.0; // 再次确保无间距
                                         for segment in &terminal_line.segments {
-                                            self.render_terminal_segment(ui, segment);
+                                            // 创建带颜色的RichText
+                                            let mut rich_text = egui::RichText::new(&segment.text)
+                                                .font(egui::FontId::monospace(14.0));
+                                            
+                                            // 应用VT100颜色
+                                            if let Some(color) = segment.color {
+                                                rich_text = rich_text.color(color);
+                                            }
+                                            
+                                            // 应用文本样式
+                                            if segment.bold {
+                                                rich_text = rich_text.strong();
+                                            }
+                                            if segment.italic {
+                                                rich_text = rich_text.italics();
+                                            }
+                                            if segment.underline {
+                                                rich_text = rich_text.underline();
+                                            }
+                                            
+                                            // 处理反显效果
+                                            if segment.inverse {
+                                                rich_text = rich_text
+                                                    .background_color(egui::Color32::BLACK)
+                                                    .color(egui::Color32::WHITE);
+                                            }
+                                            
+                                            ui.add(egui::Label::new(rich_text).selectable(true));
                                         }
                                     });
                                 }
 
                                 if let Some(anchor_line) = anchor_line_opt {
                                     ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        // 使用segment渲染最后一行（提示符行），保持颜色
+                                        ui.spacing_mut().item_spacing.x = 0.0; // 再次确保无间距
                                         for segment in &anchor_line.segments {
-                                            self.render_terminal_segment(ui, segment);
+                                            // 渲染所有segment，包括空格segment
+                                            // 创建带颜色的RichText
+                                            let mut rich_text = egui::RichText::new(&segment.text)
+                                                .font(egui::FontId::monospace(14.0));
+                                            
+                                            // 应用VT100颜色
+                                            if let Some(color) = segment.color {
+                                                rich_text = rich_text.color(color);
+                                            }
+                                            
+                                            // 应用文本样式
+                                            if segment.bold {
+                                                rich_text = rich_text.strong();
+                                            }
+                                            if segment.italic {
+                                                rich_text = rich_text.italics();
+                                            }
+                                            if segment.underline {
+                                                rich_text = rich_text.underline();
+                                            }
+                                            
+                                            // 处理反显效果
+                                            if segment.inverse {
+                                                rich_text = rich_text
+                                                    .background_color(egui::Color32::BLACK)
+                                                    .color(egui::Color32::WHITE);
+                                            }
+                                            
+                                            ui.add(egui::Label::new(rich_text).selectable(true));
                                         }
 
                                         // 只有在连接成功且有SSH输出内容时才显示输入框
                                         if self.is_connected && !self.output_buffer.is_empty() && self.has_ssh_initial_output {
-                                            // 在最后一行右侧内嵌输入框
+                                            // 在最后一行右侧内嵌输入框 - 统一样式
                                             ui.add_space(8.0);
                                             let input_response = ui.add_sized(
                                                 [ui.available_width().max(160.0), 24.0],
                                                 egui::TextEdit::singleline(&mut self.input_buffer)
-                                                    .font(egui::FontId::monospace(15.0))
+                                                    .font(egui::FontId::monospace(14.0)) // 与终端文本一致的字体大小
                                                     .hint_text(egui::RichText::new("输入命令并按回车...")
-                                                        .color(egui::Color32::from_rgb(150, 150, 150)))
+                                                        .font(egui::FontId::monospace(14.0)) // 提示文本也使用等宽字体
+                                                        .color(egui::Color32::from_rgb(128, 128, 128)))
                                                     .desired_width(f32::INFINITY)
-                                                    .frame(false)
+                                                    .frame(false) // 无边框，与终端区域融为一体
                                                     .interactive(true)
                                                     .char_limit(2000),
                                             );

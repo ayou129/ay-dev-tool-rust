@@ -289,6 +289,9 @@ impl TerminalEmulator {
 
                 // 添加字符到当前片段（包括空格字符）
                 current_segment.text.push_str(&ch);
+            } else {
+                // 处理空单元格 - 始终添加空格以保持列对齐
+                current_segment.text.push(' ');
             }
         }
 
@@ -296,6 +299,10 @@ impl TerminalEmulator {
         if !current_segment.text.is_empty() {
             line.segments.push(current_segment);
         }
+
+        // 调试：打印解析结果
+        let debug_text: String = line.segments.iter().map(|s| s.text.as_str()).collect();
+        crate::app_log!(debug, "VT100", "行 {} 解析结果: {:?}", row, debug_text);
 
         line
     }
@@ -323,25 +330,42 @@ impl TerminalEmulator {
         match color {
             vt100::Color::Default => None,
             vt100::Color::Idx(idx) => {
-                // 标准16色映射
+                // 标准256色映射 - 改进版本，支持更多颜色
                 match idx {
-                    0 => Some(egui::Color32::from_rgb(0, 0, 0)),     // 黑色
-                    1 => Some(egui::Color32::from_rgb(128, 0, 0)),   // 红色
-                    2 => Some(egui::Color32::from_rgb(0, 128, 0)),   // 绿色
-                    3 => Some(egui::Color32::from_rgb(128, 128, 0)), // 黄色
-                    4 => Some(egui::Color32::from_rgb(0, 0, 128)),   // 蓝色
-                    5 => Some(egui::Color32::from_rgb(128, 0, 128)), // 紫色
-                    6 => Some(egui::Color32::from_rgb(0, 128, 128)), // 青色
-                    7 => Some(egui::Color32::from_rgb(192, 192, 192)), // 白色
-                    8 => Some(egui::Color32::from_rgb(128, 128, 128)), // 亮黑色
-                    9 => Some(egui::Color32::from_rgb(255, 0, 0)),   // 亮红色
-                    10 => Some(egui::Color32::from_rgb(0, 255, 0)),  // 亮绿色
-                    11 => Some(egui::Color32::from_rgb(255, 255, 0)), // 亮黄色
-                    12 => Some(egui::Color32::from_rgb(0, 0, 255)),  // 亮蓝色
-                    13 => Some(egui::Color32::from_rgb(255, 0, 255)), // 亮紫色
-                    14 => Some(egui::Color32::from_rgb(0, 255, 255)), // 亮青色
-                    15 => Some(egui::Color32::from_rgb(255, 255, 255)), // 亮白色
-                    _ => None,                                       // 其他颜色暂不支持
+                    // 标准8色 (30-37)
+                    0 => Some(egui::Color32::from_rgb(0, 0, 0)),         // 黑色
+                    1 => Some(egui::Color32::from_rgb(205, 49, 49)),     // 红色
+                    2 => Some(egui::Color32::from_rgb(13, 188, 121)),    // 绿色
+                    3 => Some(egui::Color32::from_rgb(229, 229, 16)),    // 黄色
+                    4 => Some(egui::Color32::from_rgb(36, 114, 200)),    // 蓝色
+                    5 => Some(egui::Color32::from_rgb(188, 63, 188)),    // 紫色
+                    6 => Some(egui::Color32::from_rgb(17, 168, 205)),    // 青色 - 这是ls中文件夹的颜色
+                    7 => Some(egui::Color32::from_rgb(229, 229, 229)),   // 白色
+                    
+                    // 高亮8色 (90-97)
+                    8 => Some(egui::Color32::from_rgb(102, 102, 102)),   // 亮黑色
+                    9 => Some(egui::Color32::from_rgb(241, 76, 76)),     // 亮红色
+                    10 => Some(egui::Color32::from_rgb(35, 209, 139)),   // 亮绿色
+                    11 => Some(egui::Color32::from_rgb(245, 245, 67)),   // 亮黄色
+                    12 => Some(egui::Color32::from_rgb(59, 142, 234)),   // 亮蓝色
+                    13 => Some(egui::Color32::from_rgb(214, 112, 214)), // 亮紫色
+                    14 => Some(egui::Color32::from_rgb(41, 184, 219)),   // 亮青色
+                    15 => Some(egui::Color32::from_rgb(255, 255, 255)),  // 亮白色
+                    
+                    // 扩展颜色支持 (16-255)
+                    16..=231 => {
+                        // 216色立方体
+                        let n = idx - 16;
+                        let r = (n / 36) * 51;
+                        let g = ((n % 36) / 6) * 51;
+                        let b = (n % 6) * 51;
+                        Some(egui::Color32::from_rgb(r as u8, g as u8, b as u8))
+                    }
+                    232..=255 => {
+                        // 24级灰度
+                        let gray = ((idx - 232) * 10 + 8) as u8;
+                        Some(egui::Color32::from_rgb(gray, gray, gray))
+                    }
                 }
             }
             vt100::Color::Rgb(r, g, b) => Some(egui::Color32::from_rgb(r, g, b)),
