@@ -23,6 +23,8 @@ pub struct TerminalPanel {
     ssh_command_executor:
         Option<Box<dyn Fn(&str, &str, mpsc::UnboundedSender<CommandResult>) + Send + Sync>>, // SSH命令执行回调
     terminal_emulator: TerminalEmulator, // 终端模拟器
+    // ✅ 全选和复制功能状态
+    is_all_selected: bool, // 是否已全选
 }
 
 // 手动实现Debug trait
@@ -40,6 +42,7 @@ impl std::fmt::Debug for TerminalPanel {
             .field("current_prompt", &self.current_prompt)
             .field("ssh_command_executor", &"Function(hidden)") // 隐藏函数的内部细节
             .field("terminal_emulator", &"TerminalEmulator(hidden)") // 隐藏终端模拟器的内部细节
+            .field("is_all_selected", &self.is_all_selected) // ✅ 添加新字段
             .finish_non_exhaustive()
     }
 }
@@ -70,6 +73,7 @@ impl Clone for TerminalPanel {
             current_prompt: self.current_prompt.clone(),
             ssh_command_executor: None, // 克隆时不复制函数
             terminal_emulator: TerminalEmulator::new(200, 50), // 创建新的终端模拟器
+            is_all_selected: false, // ✅ 添加新字段
         }
     }
 }
@@ -94,6 +98,7 @@ impl TerminalPanel {
             current_prompt: "❯".to_string(), // 默认提示符
             ssh_command_executor: None,      // 初始化时为空，稍后设置
             terminal_emulator: TerminalEmulator::new(200, 50), // 创建终端模拟器
+            is_all_selected: false, // ✅ 初始化为未选中状态
         }
     }
 
@@ -124,6 +129,59 @@ impl TerminalPanel {
                 }
             }
         }
+    }
+
+    // ✅ 更新tab标题（基于VT100解析结果）
+    pub fn update_title_from_vt100(&mut self, vt100_title: &str) {
+        if !vt100_title.is_empty() {
+            // 提取用户友好的标题：user@host:path -> host:path
+            if let Some(at_pos) = vt100_title.find('@') {
+                if vt100_title[at_pos..].find(':').is_some() {
+                    let host_path = &vt100_title[at_pos + 1..];
+                    self.title = host_path.to_string();
+                } else {
+                    self.title = vt100_title.to_string();
+                }
+            } else {
+                self.title = vt100_title.to_string();
+            }
+            crate::app_log!(debug, "SSH", "更新tab标题: {}", self.title);
+        }
+    }
+
+    // ✅ 全选功能：选择所有终端内容
+    pub fn select_all(&mut self) {
+        self.is_all_selected = true;
+        crate::app_log!(debug, "Terminal", "全选终端内容");
+    }
+
+    // ✅ 复制功能：复制选中的终端内容到剪贴板
+    pub fn copy_to_clipboard(&mut self, ui: &mut egui::Ui) {
+        if self.is_all_selected {
+            // 将所有终端内容转换为纯文本
+            let all_text = self.output_buffer
+                .iter()
+                .map(|line| line.text())
+                .collect::<Vec<_>>()
+                .join("\n");
+            
+            // 复制到剪贴板
+            ui.ctx().copy_text(all_text.clone());
+            
+            crate::app_log!(info, "Terminal", "已复制 {} 行内容到剪贴板", self.output_buffer.len());
+            
+            // 复制后取消选择
+            self.is_all_selected = false;
+        }
+    }
+
+    // ✅ 获取所有终端内容的纯文本
+    pub fn get_all_text(&self) -> String {
+        self.output_buffer
+            .iter()
+            .map(|line| line.text())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn add_output(&mut self, text: String) {
@@ -160,6 +218,8 @@ impl TerminalPanel {
     pub fn add_ssh_output(&mut self, text: String) {
         if !text.is_empty() {
             crate::app_log!(info, "SSH", "收到SSH输出: {} 字节", text.len());
+            // ✅ 打印SSH原文数据
+            crate::app_log!(info, "SSH", "SSH原文内容: {:?}", text);
 
             // 检查是否包含ANSI转义序列
             if text.contains('\x1b') {
@@ -179,6 +239,12 @@ impl TerminalPanel {
                 if let Some(new_prompt) = result.prompt_update {
                     crate::app_log!(info, "SSH", "检测到新提示符: {}", new_prompt);
                     self.current_prompt = new_prompt;
+                }
+
+                // ✅ 更新tab标题（基于VT100解析的标题）
+                let vt100_title = self.terminal_emulator.title().to_string();
+                if !vt100_title.is_empty() {
+                    self.update_title_from_vt100(&vt100_title);
                 }
 
                 // 添加格式化的终端行（不包含提示符）
@@ -401,14 +467,14 @@ impl TerminalPanel {
                     |ui| {
                         ui.add_space(20.0);
 
-                        // 现代化提示符 - VS Code风格
+                        // ✅ 方案3：提示符紧贴输入框 - 真正的终端体验
                         ui.label(
                             egui::RichText::new(&self.current_prompt)
                                 .font(egui::FontId::monospace(15.0))
                                 .color(egui::Color32::from_rgb(78, 201, 176)), // 青绿色提示符
                         );
 
-                        ui.add_space(16.0);
+                        ui.add_space(8.0); // ✅ 减少间距，让输入框紧贴提示符
 
                         // 现代化输入框样式
                         let input_style = ui.style_mut();
@@ -485,14 +551,64 @@ impl TerminalPanel {
                 );
             });
 
-        // 现代化终端内容区域 - 参考Code和Terminal.app
+        // 现代化终端内容区域 - 参考Code和Terminal.app + 全选复制功能
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            // ✅ 处理全选和复制快捷键
+            if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::A)) {
+                self.select_all();
+            }
+            if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::C)) {
+                self.copy_to_clipboard(ui);
+            }
+
             // 终端背景 - 纯黑色背景，如真实终端
+            let terminal_bg_color = if self.is_all_selected {
+                egui::Color32::from_rgb(0, 120, 215) // 选中时的蓝色背景
+            } else {
+                egui::Color32::from_rgb(12, 12, 12) // 正常的纯黑背景
+            };
+            
             ui.painter().rect_filled(
                 ui.available_rect_before_wrap(),
                 egui::CornerRadius::ZERO,
-                egui::Color32::from_rgb(12, 12, 12), // 纯黑背景
+                terminal_bg_color,
             );
+
+            // ✅ 右键菜单支持
+            let response = ui.allocate_response(ui.available_size(), egui::Sense::click());
+            
+            response.context_menu(|ui| {
+                ui.set_style(std::sync::Arc::new(egui::Style {
+                    visuals: egui::Visuals {
+                        window_fill: egui::Color32::from_rgb(40, 40, 40),
+                        panel_fill: egui::Color32::from_rgb(40, 40, 40),
+                        override_text_color: Some(egui::Color32::WHITE),
+                        ..ui.style().visuals.clone()
+                    },
+                    ..ui.style().as_ref().clone()
+                }));
+                
+                if ui.button("🔍 全选 (Ctrl+A)").clicked() {
+                    self.select_all();
+                    ui.close();
+                }
+                
+                if ui.button("📋 复制 (Ctrl+C)").clicked() {
+                    if !self.is_all_selected {
+                        self.select_all();
+                    }
+                    self.copy_to_clipboard(ui);
+                    ui.close();
+                }
+                
+                ui.separator();
+                
+                if ui.button("🗑️ 清空终端").clicked() {
+                    self.output_buffer.clear();
+                    self.is_all_selected = false;
+                    ui.close();
+                }
+            });
 
             // 现代化边距和滚动
             egui::Frame::NONE
@@ -529,6 +645,12 @@ impl TerminalPanel {
                                             egui::RichText::new("在下方输入命令开始使用")
                                                 .font(egui::FontId::proportional(14.0))
                                                 .color(egui::Color32::from_rgb(171, 178, 191)),
+                                        );
+                                        ui.add_space(12.0);
+                                        ui.label(
+                                            egui::RichText::new("💡 右键菜单：全选、复制、清空")
+                                                .font(egui::FontId::proportional(12.0))
+                                                .color(egui::Color32::from_rgb(128, 128, 128)),
                                         );
                                     });
                                 }

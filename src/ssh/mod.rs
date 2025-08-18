@@ -17,12 +17,15 @@ pub struct SshConnection {
     session: Session,
     stream: TcpStream,
     connection_info: ConnectionConfig,
+    // ✅ 持久的shell channel - 真正的终端会话
+    shell_channel: Option<ssh2::Channel>,
 }
 
 impl std::fmt::Debug for SshConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SshConnection")
             .field("connection_info", &self.connection_info)
+            .field("has_shell_channel", &self.shell_channel.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -97,10 +100,23 @@ impl SshConnection {
 
         log_ssh_connection_success(&config.host, config.port, &config.username);
 
+        // ✅ 立即创建持久的shell channel
+        let mut shell_channel = session.channel_session()?;
+        shell_channel.request_pty("xterm-256color", None, None)?;
+        shell_channel.shell()?;
+        
+        // ✅ 通过命令设置UTF8环境变量（兼容性更好）
+        let utf8_setup = "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export TERM=xterm-256color\n";
+        shell_channel.write_all(utf8_setup.as_bytes())?;
+        shell_channel.flush()?;
+        
+        crate::app_log!(info, "SSH", "已创建持久shell channel");
+
         Ok(Self {
             session,
             stream: tcp,
             connection_info: config.clone(),
+            shell_channel: Some(shell_channel),
         })
     }
 
@@ -112,59 +128,44 @@ impl SshConnection {
 
         log_ssh_command_execution(command, &connection_id);
 
-        let result = || -> Result<String> {
-            let mut channel = self.session.channel_session()?;
-            channel.exec(command)?;
+        // ✅ 使用持久shell channel执行命令
+        if let Some(ref mut channel) = self.shell_channel {
+            // 向shell写入命令
+            let command_with_newline = format!("{}\n", command);
+            channel.write_all(command_with_newline.as_bytes())?;
+            channel.flush()?;
 
-            // 同时读取stdout和stderr
-            let mut stdout = String::new();
-            let mut stderr = String::new();
-
-            // 读取标准输出
-            channel.read_to_string(&mut stdout)?;
-            // 读取标准错误
-            channel.stderr().read_to_string(&mut stderr)?;
-
-            channel.wait_close()?;
-
-            let exit_status = channel.exit_status()?;
-
-            // 合并输出内容
-            let combined_output = if stderr.is_empty() {
-                stdout
-            } else if stdout.is_empty() {
-                stderr
-            } else {
-                format!("{}\n{}", stdout, stderr)
-            };
-
-            if exit_status == 0 {
-                log_ssh_command_success(command, &connection_id, combined_output.len());
-                Ok(combined_output)
-            } else {
-                let error_msg = format!("命令退出状态: {}", exit_status);
-                log_ssh_command_failed(command, &connection_id, &error_msg);
-                // 失败时返回错误，但错误信息包含实际的输出内容
-                Err(anyhow::anyhow!("{}", combined_output))
+            // 等待命令执行完成并读取输出
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            
+            let mut output = String::new();
+            let mut buffer = vec![0; 8192];
+            
+            // 读取可用数据
+            match channel.read(&mut buffer) {
+                Ok(bytes_read) if bytes_read > 0 => {
+                    let text = String::from_utf8_lossy(&buffer[..bytes_read]);
+                    output.push_str(&text);
+                }
+                Ok(_) => {
+                    // 没有读取到数据，可能命令还在执行
+                }
+                Err(e) => {
+                    let error_msg = format!("读取命令输出失败: {}", e);
+                    log_ssh_command_failed(command, &connection_id, &error_msg, "");
+                    return Err(anyhow::anyhow!(error_msg));
+                }
             }
-        }();
 
-        match &result {
-            Ok(output) => {
-                crate::app_log!(
-                    debug,
-                    "SSH",
-                    "命令执行成功: '{}' -> {} 字符",
-                    command,
-                    output.len()
-                );
-            }
-            Err(e) => {
-                log_ssh_command_failed(command, &connection_id, &e.to_string());
-            }
+            log_ssh_command_success(command, &connection_id, output.len());
+            crate::app_log!(debug, "SSH", "命令执行成功: '{}' -> {} 字符", command, output.len());
+            
+            Ok(output)
+        } else {
+            let error_msg = "没有可用的shell channel";
+            log_ssh_command_failed(command, &connection_id, error_msg, "");
+            Err(anyhow::anyhow!(error_msg))
         }
-
-        result
     }
 
     pub fn get_info(&self) -> &ConnectionConfig {
@@ -182,8 +183,13 @@ impl SshConnection {
 
         // 创建临时通道获取初始输出
         let mut channel = self.session.channel_session()?;
-        channel.request_pty("xterm", None, None)?;
+        channel.request_pty("xterm-256color", None, None)?;
         channel.shell()?;
+        
+        // ✅ 通过命令设置UTF8环境变量（兼容性更好）
+        let utf8_setup = "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export TERM=xterm-256color\n";
+        channel.write_all(utf8_setup.as_bytes())?;
+        channel.flush()?;
 
         // 等待服务器发送初始数据
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
