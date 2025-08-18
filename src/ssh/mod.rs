@@ -130,44 +130,52 @@ impl SshConnection {
 
         log_ssh_command_execution(command, &connection_id);
 
-        // ✅ 使用持久shell channel执行命令
-        if let Some(ref mut channel) = self.shell_channel {
-            // 向shell写入命令
-            let command_with_newline = format!("{}\n", command);
-            channel.write_all(command_with_newline.as_bytes())?;
-            channel.flush()?;
-
-            // 等待命令执行完成并读取输出
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            
-            let mut output = String::new();
-            let mut buffer = vec![0; 8192];
-            
-            // 读取可用数据
-            match channel.read(&mut buffer) {
-                Ok(bytes_read) if bytes_read > 0 => {
-                    let text = String::from_utf8_lossy(&buffer[..bytes_read]);
-                    output.push_str(&text);
-                }
-                Ok(_) => {
-                    // 没有读取到数据，可能命令还在执行
-                }
-                Err(e) => {
-                    let error_msg = format!("读取命令输出失败: {}", e);
-                    log_ssh_command_failed(command, &connection_id, &error_msg, "");
-                    return Err(anyhow::anyhow!(error_msg));
-                }
-            }
-
-            log_ssh_command_success(command, &connection_id, output.len());
-            crate::app_log!(debug, "SSH", "命令执行成功: '{}' -> {} 字符", command, output.len());
-            
-            Ok(output)
-        } else {
-            let error_msg = "没有可用的shell channel";
-            log_ssh_command_failed(command, &connection_id, error_msg, "");
-            Err(anyhow::anyhow!(error_msg))
+        // 🔥 新设计：每个命令使用独立的channel，像iTerm2一样
+        let mut channel = self.session.channel_session()?;
+        
+        // 设置环境以保持一致性
+        channel.request_pty("xterm-256color", None, None)?;
+        if let Err(_) = channel.setenv("LANG", "en_US.UTF-8") {
+            // 忽略setenv失败，某些服务器不支持
         }
+        if let Err(_) = channel.setenv("LC_ALL", "en_US.UTF-8") {
+            // 忽略setenv失败
+        }
+        
+        // 直接执行命令（不是shell模式）
+        channel.exec(command)?;
+        
+        crate::app_log!(debug, "SSH", "创建独立channel执行命令: {}", command);
+
+        // 使用SSH2的标准读取方式
+        let mut output = String::new();
+        
+        // 使用BufReader进行高效读取
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(&mut channel);
+        let mut line = String::new();
+        
+        crate::app_log!(debug, "SSH", "开始读取命令输出");
+        
+        // 逐行读取直到EOF
+        while reader.read_line(&mut line)? > 0 {
+            output.push_str(&line);
+            crate::app_log!(debug, "SSH", "读取一行: {} 字节", line.len());
+            line.clear();
+        }
+        
+        crate::app_log!(debug, "SSH", "读取完成，等待通道关闭");
+        
+        // 等待命令执行完毕
+        channel.wait_close()?;
+        let exit_status = channel.exit_status().unwrap_or(-1);
+        
+        crate::app_log!(debug, "SSH", "命令执行完成，退出状态: {}", exit_status);
+
+        log_ssh_command_success(command, &connection_id, output.len());
+        crate::app_log!(debug, "SSH", "命令执行成功: '{}' -> {} 字符", command, output.len());
+        
+        Ok(output)
     }
 
     pub fn get_info(&self) -> &ConnectionConfig {
