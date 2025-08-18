@@ -164,18 +164,25 @@ impl TerminalPanel {
             // 检查是否包含ANSI转义序列
             if text.contains('\x1b') {
                 // 使用TerminalEmulator处理SSH输出
-                let terminal_lines = self.terminal_emulator.process_ssh_output(&text);
+                let result = self.terminal_emulator.process_ssh_output(&text);
 
                 // 记录处理结果
-                let processed_text: String = terminal_lines
+                let processed_text: String = result
+                    .lines
                     .iter()
                     .map(|line| line.text())
                     .collect::<Vec<_>>()
                     .join("\n");
                 crate::app_log!(debug, "SSH", "终端模拟器处理后: {}", processed_text.trim());
 
-                // 直接添加格式化的终端行
-                self.add_terminal_lines(terminal_lines);
+                // 处理提示符更新
+                if let Some(new_prompt) = result.prompt_update {
+                    crate::app_log!(info, "SSH", "检测到新提示符: {}", new_prompt);
+                    self.current_prompt = new_prompt;
+                }
+
+                // 添加格式化的终端行（不包含提示符）
+                self.add_terminal_lines(result.lines);
             } else {
                 // 纯文本，直接显示
                 self.add_output(text);
