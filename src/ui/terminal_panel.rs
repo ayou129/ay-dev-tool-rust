@@ -312,8 +312,8 @@ impl TerminalPanel {
                 .color(egui::Color32::BLACK);
         }
 
-        // 渲染标签
-        ui.add(egui::Label::new(rich_text).wrap());
+        // 渲染标签（不自动换行，确保与输入框同一行）
+        ui.add(egui::Label::new(rich_text));
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -456,7 +456,14 @@ impl TerminalPanel {
             };
 
             let rect = ui.available_rect_before_wrap();
-            ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, terminal_bg_color);
+            // 边框
+            ui.painter().rect_stroke(
+                rect.shrink(0.5),
+                egui::CornerRadius::same(4),
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 210, 210)),
+                egui::StrokeKind::Outside,
+            );
+            ui.painter().rect_filled(rect.shrink(1.0), egui::CornerRadius::same(4), terminal_bg_color);
 
             // 右键菜单（不再占用布局空间）
             let area_id = ui.id().with("terminal_area");
@@ -499,57 +506,81 @@ impl TerminalPanel {
                 .inner_margin(egui::Margin::symmetric(20, 16))
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
-                        .stick_to_bottom(self.scroll_to_bottom)
+                        .stick_to_bottom(true)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                                 // 新架构：基于TerminalSegment属性渲染
-                                let total = self.output_buffer.len();
-                                for (idx, terminal_line) in self.output_buffer.iter().enumerate() {
-                                    let is_last = idx + 1 == total;
-                                    let is_prompt_line = {
-                                        let line_text = terminal_line.text();
-                                        let lt = line_text.trim();
-                                        let pt = self.current_prompt.trim();
-                                        !pt.is_empty() && lt == pt
-                                    };
+                                // 选择“锚点行”：从末尾向前找第一条非空行（常为 (base) ➜  ~）
+                                let len = self.output_buffer.len();
+                                let mut anchor_idx: Option<usize> = None;
+                                for i in (0..len).rev() {
+                                    if let Some(line) = self.output_buffer.get(i) {
+                                        if !line.text().trim().is_empty() {
+                                            anchor_idx = Some(i);
+                                            break;
+                                        }
+                                    }
+                                }
 
+                                let (before_anchor, anchor_line_opt) = if let Some(i) = anchor_idx {
+                                    (
+                                        self.output_buffer
+                                            .iter()
+                                            .take(i)
+                                            .cloned()
+                                            .collect::<Vec<_>>(),
+                                        self.output_buffer.get(i).cloned(),
+                                    )
+                                } else {
+                                    (Vec::new(), None)
+                                };
+
+                                for terminal_line in before_anchor {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.spacing_mut().item_spacing.x = 0.0;
-
-                                        // 渲染每个格式化片段
                                         for segment in &terminal_line.segments {
                                             self.render_terminal_segment(ui, segment);
                                         }
+                                    });
+                                }
 
-                                        // 若为最后一行且是提示符行，则在同一行内嵌输入框
-                                        if is_last && is_prompt_line {
-                                            ui.add_space(8.0);
-                                            let input_response = ui.add_sized(
-                                                [ui.available_width().max(160.0), 28.0],
-                                                egui::TextEdit::singleline(&mut self.input_buffer)
-                                                    .font(egui::FontId::monospace(15.0))
-                                                    .hint_text("输入命令并按回车...")
-                                                    .desired_width(f32::INFINITY)
-                                                    .char_limit(2000),
-                                            );
+                                if let Some(anchor_line) = anchor_line_opt {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        for segment in &anchor_line.segments {
+                                            self.render_terminal_segment(ui, segment);
+                                        }
 
-                                            // Enter 提交
-                                            if input_response.has_focus()
-                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                            {
-                                                self.execute_command();
-                                            }
-                                            if input_response.lost_focus()
-                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                            {
-                                                self.execute_command();
-                                            }
+                                        // 在最后一行右侧内嵌输入框
+                                        ui.add_space(8.0);
+                                        let input_response = ui.add_sized(
+                                            [ui.available_width().max(160.0), 24.0],
+                                            egui::TextEdit::singleline(&mut self.input_buffer)
+                                                .font(egui::FontId::monospace(15.0))
+                                                .hint_text(egui::RichText::new("输入命令并按回车...")
+                                                    .color(egui::Color32::from_rgb(150, 150, 150)))
+                                                .desired_width(f32::INFINITY)
+                                                .frame(false)
+                                                .interactive(true)
+                                                .char_limit(2000),
+                                        );
 
-                                            // 自动聚焦（连接后）
-                                            if self.is_connected && !input_response.has_focus() {
-                                                input_response.request_focus();
-                                            }
+                                        // Enter 提交
+                                        if input_response.has_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            self.execute_command();
+                                        }
+                                        if input_response.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            self.execute_command();
+                                        }
+
+                                        // 自动聚焦（连接后）
+                                        if self.is_connected && !input_response.has_focus() {
+                                            input_response.request_focus();
                                         }
                                     });
                                 }
@@ -580,10 +611,6 @@ impl TerminalPanel {
                             });
                         });
                 });
-
-            if self.scroll_to_bottom {
-                self.scroll_to_bottom = false;
-            }
         });
     }
 
@@ -641,10 +668,8 @@ impl TerminalPanel {
                     // 注意：命令已在execute_command中显示，这里只显示结果
                     match result.output {
                         Ok(output) => {
-                            if !output.trim().is_empty() {
-                                // 使用SSH输出处理方法，会进行VT100解析和提示符更新
-                                self.add_ssh_output(output);
-                            }
+                            // 任何返回都交给VT100解析（包括空返回）
+                            self.add_ssh_output(output);
                         }
                         Err(error) => {
                             // SSH错误信息现在包含实际的命令输出，直接显示
@@ -666,9 +691,10 @@ impl TerminalPanel {
                 return;
             }
 
-            self.add_output(format!("$ {}", command));
-
             if self.is_connected && self.tab_id.is_some() {
+                // 本地将命令拼接到最后一行提示符右侧，模拟真实终端回显
+                self.append_command_to_last_prompt(command.trim());
+                self.scroll_to_bottom = true;
                 // 直接调用SSH命令执行器
                 let tab_id = self.tab_id.clone().unwrap();
                 let cmd = command.trim().to_string();
@@ -684,6 +710,16 @@ impl TerminalPanel {
             }
 
             self.input_buffer.clear();
+        }
+    }
+
+    // 将用户输入的命令附加到最后一行（提示符行）右侧
+    fn append_command_to_last_prompt(&mut self, cmd: &str) {
+        if let Some(last_line) = self.output_buffer.back_mut() {
+            let mut seg = TerminalSegment::default();
+            seg.text = format!(" {}", cmd);
+            seg.color = Some(egui::Color32::from_rgb(0, 102, 153));
+            last_line.segments.push(seg);
         }
     }
 

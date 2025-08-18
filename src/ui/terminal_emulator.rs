@@ -62,12 +62,18 @@ pub struct TerminalProcessResult {
 /// 终端模拟器 - 负责将VT100解析结果转换为终端逻辑
 pub struct TerminalEmulator {
     parser: vt100::Parser,
+    _width: u16,
+    _height: u16,
+    last_line_count: usize,
 }
 
 impl TerminalEmulator {
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             parser: vt100::Parser::new(height, width, 0),
+            _width: width,
+            _height: height,
+            last_line_count: 0,
         }
     }
 
@@ -167,7 +173,7 @@ impl TerminalEmulator {
 
     /// 处理SSH原始输出，返回格式化的终端行和可能的提示符更新
     pub fn process_ssh_output(&mut self, raw_data: &str) -> TerminalProcessResult {
-        // 让VT100解析ANSI序列
+        // 累积处理数据，保持屏幕上下文，确保“提示符 + 命令”在同一行
         self.parser.process(raw_data.as_bytes());
 
         // 将VT100解析结果转换为终端逻辑
@@ -175,16 +181,16 @@ impl TerminalEmulator {
     }
 
     /// 从VT100解析器中提取格式化的终端内容和提示符
-    fn extract_terminal_content(&self) -> TerminalProcessResult {
+    fn extract_terminal_content(&mut self) -> TerminalProcessResult {
         let mut lines = Vec::new();
 
         // 尝试用光标行作为提示符，否则回退到 title/icon
         let screen = self.parser.screen();
         let (cursor_row, _cursor_col) = self.cursor_position();
-        let prompt_update = if cursor_row > 0 {
+        let prompt_update = if cursor_row > 1 {
             let prompt_line = self.extract_line_from_screen(cursor_row - 1, &screen);
             let text = prompt_line.text().trim().to_string();
-            if !text.is_empty() { Some(text) } else { None }
+            if !text.is_empty() && !text.starts_with("Last login") { Some(text) } else { None }
         } else if !self.icon_name().is_empty() {
             Some(self.icon_name().to_string())
         } else if !self.title().is_empty() {
@@ -246,8 +252,17 @@ impl TerminalEmulator {
             }
         }
 
+        // 仅返回新增行，避免重复输出（如 Last login）
+        let new_lines = if self.last_line_count <= lines.len() {
+            lines[self.last_line_count..].to_vec()
+        } else {
+            // 屏幕被清空或尺寸变化，全部返回
+            lines.clone()
+        };
+        self.last_line_count = lines.len();
+
         TerminalProcessResult {
-            lines,
+            lines: new_lines,
             prompt_update,
         }
     }
