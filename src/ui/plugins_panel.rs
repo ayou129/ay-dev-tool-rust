@@ -251,13 +251,13 @@ impl PluginsPanel {
                         if let Some(install_cmd) = software["install_command"].as_str() {
                             if ui
                                 .small_button(
-                                    egui::RichText::new(format!("{} 安装", regular::DOWNLOAD))
+                                    egui::RichText::new(format!("{} 复制安装命令", regular::DOWNLOAD))
                                         .size(12.0),
                                 )
                                 .on_hover_text(install_cmd)
                                 .clicked()
                             {
-                                // TODO: 执行安装命令
+                                ui.ctx().copy_text(install_cmd.to_string());
                             }
                         }
                     }

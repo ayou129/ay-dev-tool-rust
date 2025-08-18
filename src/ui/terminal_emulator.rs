@@ -178,8 +178,14 @@ impl TerminalEmulator {
     fn extract_terminal_content(&self) -> TerminalProcessResult {
         let mut lines = Vec::new();
 
-        // ✅ 极简逻辑：直接使用VT100的标准API，不为空就用
-        let prompt_update = if !self.icon_name().is_empty() {
+        // 尝试用光标行作为提示符，否则回退到 title/icon
+        let screen = self.parser.screen();
+        let (cursor_row, _cursor_col) = self.cursor_position();
+        let prompt_update = if cursor_row > 0 {
+            let prompt_line = self.extract_line_from_screen(cursor_row - 1, &screen);
+            let text = prompt_line.text().trim().to_string();
+            if !text.is_empty() { Some(text) } else { None }
+        } else if !self.icon_name().is_empty() {
             Some(self.icon_name().to_string())
         } else if !self.title().is_empty() {
             Some(self.title().to_string())
@@ -222,8 +228,7 @@ impl TerminalEmulator {
             crate::app_log!(debug, "VT100", "解析错误计数: {}", self.error_count());
         }
 
-        // 获取VT100屏幕引用
-        let screen = self.parser.screen();
+        // 获取VT100屏幕引用（已在上方获取）
 
         for row in 0..screen.size().0 {
             let line = self.extract_line_from_screen(row, &screen);
@@ -233,12 +238,7 @@ impl TerminalEmulator {
                 continue;
             }
 
-            // 如果检测到提示符更新，跳过包含提示符的显示行
-            if prompt_update.is_some()
-                && self.line_contains_prompt(&line, prompt_update.as_ref().unwrap())
-            {
-                continue;
-            }
+            // 不再跳过包含提示符的行，允许将提示符行渲染出来，便于在UI中内嵌输入
 
             // 只保留有意义的非提示符行
             if !line.is_empty() {
@@ -365,12 +365,5 @@ impl TerminalEmulator {
             }
         }
         false
-    }
-
-    /// 检查行是否包含指定的提示符
-    fn line_contains_prompt(&self, line: &TerminalLine, prompt: &str) -> bool {
-        let line_text = line.text();
-        let text = line_text.trim();
-        text == prompt || text.contains(prompt)
     }
 }

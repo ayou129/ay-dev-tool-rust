@@ -196,7 +196,12 @@ impl ConnectionManager {
                                             )
                                             .clicked()
                                         {
-                                            // TODO: 实现文件选择器
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .add_filter("Key files", &["pem", "key", "ppk"])
+                                                .pick_file()
+                                            {
+                                                key_file = path.to_string_lossy().to_string();
+                                            }
                                         }
                                     });
                                     connection.key_file = Some(key_file);

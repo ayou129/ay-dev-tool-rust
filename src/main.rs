@@ -89,8 +89,8 @@ fn main() -> eframe::Result<()> {
             // 设置字体以支持中文
             setup_custom_fonts(&cc.egui_ctx);
 
-            // 启用深色主题
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // 启用浅色主题（白底黑字，类似 iTerm2 明亮主题）
+            cc.egui_ctx.set_visuals(egui::Visuals::light());
 
             // 创建应用实例
             Ok(Box::new(app::TerminalApp::new(cc)))

@@ -102,15 +102,17 @@ impl SshConnection {
 
         // ✅ 立即创建持久的shell channel
         let mut shell_channel = session.channel_session()?;
+        // 使用PTY请求设置TERM
         shell_channel.request_pty("xterm-256color", None, None)?;
+        // 使用setenv在会话环境中设置编码（如果服务端允许）
+        if let Err(e) = shell_channel.setenv("LANG", "en_US.UTF-8") {
+            crate::app_log!(warn, "SSH", "设置 LANG 环境变量失败: {}", e);
+        }
+        if let Err(e) = shell_channel.setenv("LC_ALL", "en_US.UTF-8") {
+            crate::app_log!(warn, "SSH", "设置 LC_ALL 环境变量失败: {}", e);
+        }
         shell_channel.shell()?;
-        
-        // ✅ 通过命令设置UTF8环境变量（兼容性更好）
-        let utf8_setup = "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export TERM=xterm-256color\n";
-        shell_channel.write_all(utf8_setup.as_bytes())?;
-        shell_channel.flush()?;
-        
-        crate::app_log!(info, "SSH", "已创建持久shell channel");
+        crate::app_log!(info, "SSH", "已创建持久shell channel (TERM=xterm-256color, LANG/LC_ALL 通过 setenv 尝试设置)");
 
         Ok(Self {
             session,
@@ -184,12 +186,14 @@ impl SshConnection {
         // 创建临时通道获取初始输出
         let mut channel = self.session.channel_session()?;
         channel.request_pty("xterm-256color", None, None)?;
+        // 优先尝试通过 setenv 设置编码
+        if let Err(e) = channel.setenv("LANG", "en_US.UTF-8") {
+            crate::app_log!(warn, "SSH", "初始输出通道设置 LANG 失败: {}", e);
+        }
+        if let Err(e) = channel.setenv("LC_ALL", "en_US.UTF-8") {
+            crate::app_log!(warn, "SSH", "初始输出通道设置 LC_ALL 失败: {}", e);
+        }
         channel.shell()?;
-        
-        // ✅ 通过命令设置UTF8环境变量（兼容性更好）
-        let utf8_setup = "export LANG=en_US.UTF-8; export LC_ALL=en_US.UTF-8; export TERM=xterm-256color\n";
-        channel.write_all(utf8_setup.as_bytes())?;
-        channel.flush()?;
 
         // 等待服务器发送初始数据
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
