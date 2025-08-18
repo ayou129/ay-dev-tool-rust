@@ -25,6 +25,7 @@ pub struct TerminalPanel {
     terminal_emulator: TerminalEmulator, // 终端模拟器
     // ✅ 全选和复制功能状态
     is_all_selected: bool, // 是否已全选
+    has_ssh_initial_output: bool, // 是否已收到SSH初始输出
 }
 
 // 手动实现Debug trait
@@ -43,6 +44,7 @@ impl std::fmt::Debug for TerminalPanel {
             .field("ssh_command_executor", &"Function(hidden)") // 隐藏函数的内部细节
             .field("terminal_emulator", &"TerminalEmulator(hidden)") // 隐藏终端模拟器的内部细节
             .field("is_all_selected", &self.is_all_selected) // ✅ 添加新字段
+            .field("has_ssh_initial_output", &self.has_ssh_initial_output) // ✅ 添加新字段
             .finish_non_exhaustive()
     }
 }
@@ -74,6 +76,7 @@ impl Clone for TerminalPanel {
             ssh_command_executor: None, // 克隆时不复制函数
             terminal_emulator: TerminalEmulator::new(200, 50), // 创建新的终端模拟器
             is_all_selected: false, // ✅ 添加新字段
+            has_ssh_initial_output: false, // 初始化为未收到SSH输出
         }
     }
 }
@@ -99,6 +102,7 @@ impl TerminalPanel {
             ssh_command_executor: None,      // 初始化时为空，稍后设置
             terminal_emulator: TerminalEmulator::new(200, 50), // 创建终端模拟器
             is_all_selected: false, // ✅ 初始化为未选中状态
+            has_ssh_initial_output: false, // 初始化为未收到SSH输出
         }
     }
 
@@ -245,6 +249,9 @@ impl TerminalPanel {
 
                 // 添加格式化的终端行（不包含提示符）
                 self.add_terminal_lines(result.lines);
+                
+                // 标记已收到SSH初始输出
+                self.has_ssh_initial_output = true;
             } else {
                 // 纯文本，直接显示
                 self.add_output(text);
@@ -252,13 +259,15 @@ impl TerminalPanel {
         }
     }
 
+
+
     // 渲染单个终端片段（基于VT100属性）
     fn render_terminal_segment(&self, ui: &mut egui::Ui, segment: &TerminalSegment) {
         if segment.text.is_empty() {
             return;
         }
 
-        // 基于TerminalSegment的属性创建RichText
+        // 基于TerminalSegment的属性创建RichText（使用等宽字体确保列对齐）
         let mut rich_text = egui::RichText::new(&segment.text).font(egui::FontId::monospace(14.0));
 
         // 应用颜色（优先使用VT100解析的颜色）
@@ -312,7 +321,7 @@ impl TerminalPanel {
                 .color(egui::Color32::BLACK);
         }
 
-        // 渲染标签（不自动换行，确保与输入框同一行）
+        // 渲染标签（使用等宽字体，确保列对齐）
         ui.add(egui::Label::new(rich_text));
     }
 
@@ -552,8 +561,8 @@ impl TerminalPanel {
                                             self.render_terminal_segment(ui, segment);
                                         }
 
-                                        // 只有在连接成功且有输出内容时才显示输入框
-                                        if self.is_connected && !self.output_buffer.is_empty() {
+                                        // 只有在连接成功且有SSH输出内容时才显示输入框
+                                        if self.is_connected && !self.output_buffer.is_empty() && self.has_ssh_initial_output {
                                             // 在最后一行右侧内嵌输入框
                                             ui.add_space(8.0);
                                             let input_response = ui.add_sized(
@@ -583,6 +592,8 @@ impl TerminalPanel {
                                             // 自动聚焦（连接后且有输出内容时）
                                             if !input_response.has_focus() {
                                                 input_response.request_focus();
+                                                // 强制触发IME状态更新，解决中文输入问题
+                                                ui.ctx().request_repaint();
                                             }
                                         }
                                     });
