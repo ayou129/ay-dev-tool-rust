@@ -287,10 +287,8 @@ impl TerminalEmulator {
                     current_segment = new_attrs;
                 }
 
-                // 添加字符到当前片段
-                if !ch.trim().is_empty() || !current_segment.text.is_empty() {
-                    current_segment.text.push_str(&ch);
-                }
+                // 添加字符到当前片段（包括空格字符）
+                current_segment.text.push_str(&ch);
             }
         }
 

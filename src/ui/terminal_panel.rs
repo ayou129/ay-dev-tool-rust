@@ -537,7 +537,7 @@ impl TerminalPanel {
                                 };
 
                                 for terminal_line in before_anchor {
-                                    ui.horizontal_wrapped(|ui| {
+                                    ui.horizontal(|ui| {
                                         ui.spacing_mut().item_spacing.x = 0.0;
                                         for segment in &terminal_line.segments {
                                             self.render_terminal_segment(ui, segment);
@@ -552,35 +552,38 @@ impl TerminalPanel {
                                             self.render_terminal_segment(ui, segment);
                                         }
 
-                                        // 在最后一行右侧内嵌输入框
-                                        ui.add_space(8.0);
-                                        let input_response = ui.add_sized(
-                                            [ui.available_width().max(160.0), 24.0],
-                                            egui::TextEdit::singleline(&mut self.input_buffer)
-                                                .font(egui::FontId::monospace(15.0))
-                                                .hint_text(egui::RichText::new("输入命令并按回车...")
-                                                    .color(egui::Color32::from_rgb(150, 150, 150)))
-                                                .desired_width(f32::INFINITY)
-                                                .frame(false)
-                                                .interactive(true)
-                                                .char_limit(2000),
-                                        );
+                                        // 只有在连接成功且有输出内容时才显示输入框
+                                        if self.is_connected && !self.output_buffer.is_empty() {
+                                            // 在最后一行右侧内嵌输入框
+                                            ui.add_space(8.0);
+                                            let input_response = ui.add_sized(
+                                                [ui.available_width().max(160.0), 24.0],
+                                                egui::TextEdit::singleline(&mut self.input_buffer)
+                                                    .font(egui::FontId::monospace(15.0))
+                                                    .hint_text(egui::RichText::new("输入命令并按回车...")
+                                                        .color(egui::Color32::from_rgb(150, 150, 150)))
+                                                    .desired_width(f32::INFINITY)
+                                                    .frame(false)
+                                                    .interactive(true)
+                                                    .char_limit(2000),
+                                            );
 
-                                        // Enter 提交
-                                        if input_response.has_focus()
-                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                        {
-                                            self.execute_command();
-                                        }
-                                        if input_response.lost_focus()
-                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                        {
-                                            self.execute_command();
-                                        }
+                                            // Enter 提交
+                                            if input_response.has_focus()
+                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                            {
+                                                self.execute_command();
+                                            }
+                                            if input_response.lost_focus()
+                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                            {
+                                                self.execute_command();
+                                            }
 
-                                        // 自动聚焦（连接后）
-                                        if self.is_connected && !input_response.has_focus() {
-                                            input_response.request_focus();
+                                            // 自动聚焦（连接后且有输出内容时）
+                                            if !input_response.has_focus() {
+                                                input_response.request_focus();
+                                            }
                                         }
                                     });
                                 }
