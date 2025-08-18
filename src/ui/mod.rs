@@ -1,5 +1,6 @@
 pub mod connection_manager;
 pub mod plugins_panel;
+pub mod terminal_emulator;
 pub mod terminal_panel;
 
 use serde::{Deserialize, Serialize};

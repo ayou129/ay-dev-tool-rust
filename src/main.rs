@@ -67,11 +67,11 @@ fn main() -> eframe::Result<()> {
     logger.lock().unwrap().info("App", "应用程序启动");
 
     // 记录日志文件路径
-    if let Ok(log_instance) = logger.lock() {
-        if let Some(log_path) = &log_instance.log_file_path {
-            println!("📝 日志文件路径: {:?}", log_path);
-            log::info!("日志文件路径: {:?}", log_path);
-        }
+    if let Ok(log_instance) = logger.lock()
+        && let Some(log_path) = &log_instance.log_file_path
+    {
+        println!("📝 日志文件路径: {:?}", log_path);
+        log::info!("日志文件路径: {:?}", log_path);
     }
 
     let options = eframe::NativeOptions {

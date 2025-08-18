@@ -1,4 +1,5 @@
 use crate::ssh::SshManager;
+use crate::ui::terminal_emulator::{TerminalEmulator, TerminalLine, TerminalSegment};
 
 use eframe::egui;
 use egui_phosphor::regular;
@@ -6,12 +7,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
-use vt100;
 
 pub struct TerminalPanel {
     pub title: String,
     pub connection_info: String,
-    pub output_buffer: VecDeque<String>,
+    pub output_buffer: VecDeque<TerminalLine>,
     input_buffer: String,
     scroll_to_bottom: bool,
     pub is_connected: bool,
@@ -22,9 +22,10 @@ pub struct TerminalPanel {
     current_prompt: String, // 当前提示符，如 "(base) ➜  ~"
     ssh_command_executor:
         Option<Box<dyn Fn(&str, &str, mpsc::UnboundedSender<CommandResult>) + Send + Sync>>, // SSH命令执行回调
+    terminal_emulator: TerminalEmulator, // 终端模拟器
 }
 
-// 手动实现Debug trait，因为Parser不实现Debug
+// 手动实现Debug trait
 impl std::fmt::Debug for TerminalPanel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TerminalPanel")
@@ -38,6 +39,7 @@ impl std::fmt::Debug for TerminalPanel {
             .field("tab_id", &self.tab_id)
             .field("current_prompt", &self.current_prompt)
             .field("ssh_command_executor", &"Function(hidden)") // 隐藏函数的内部细节
+            .field("terminal_emulator", &"TerminalEmulator(hidden)") // 隐藏终端模拟器的内部细节
             .finish_non_exhaustive()
     }
 }
@@ -67,6 +69,7 @@ impl Clone for TerminalPanel {
             command_sender: Some(sender),
             current_prompt: self.current_prompt.clone(),
             ssh_command_executor: None, // 克隆时不复制函数
+            terminal_emulator: TerminalEmulator::new(200, 50), // 创建新的终端模拟器
         }
     }
 }
@@ -90,6 +93,7 @@ impl TerminalPanel {
             command_sender: Some(sender),
             current_prompt: "❯".to_string(), // 默认提示符
             ssh_command_executor: None,      // 初始化时为空，稍后设置
+            terminal_emulator: TerminalEmulator::new(200, 50), // 创建终端模拟器
         }
     }
 
@@ -123,7 +127,13 @@ impl TerminalPanel {
     }
 
     pub fn add_output(&mut self, text: String) {
-        self.output_buffer.push_back(text);
+        // 将简单文本转换为TerminalLine（兼容性方法）
+        let mut line = TerminalLine::new();
+        let mut segment = TerminalSegment::default();
+        segment.text = text;
+        line.segments.push(segment);
+
+        self.output_buffer.push_back(line);
 
         // 限制缓冲区大小
         while self.output_buffer.len() > 10000 {
@@ -133,25 +143,108 @@ impl TerminalPanel {
         self.scroll_to_bottom = true;
     }
 
-    // SSH输出处理 - 使用VT100处理ANSI序列，但不自己解释内容
+    pub fn add_terminal_lines(&mut self, lines: Vec<TerminalLine>) {
+        for line in lines {
+            self.output_buffer.push_back(line);
+        }
+
+        // 限制缓冲区大小
+        while self.output_buffer.len() > 10000 {
+            self.output_buffer.pop_front();
+        }
+
+        self.scroll_to_bottom = true;
+    }
+
+    // SSH输出处理 - 使用新的分层架构
     pub fn add_ssh_output(&mut self, text: String) {
         if !text.is_empty() {
             crate::app_log!(info, "SSH", "收到SSH输出: {} 字节", text.len());
 
             // 检查是否包含ANSI转义序列
             if text.contains('\x1b') {
-                // 包含ANSI序列，使用VT100处理得到干净的文本
-                let mut parser = vt100::Parser::new(200, 50, 0);
-                parser.process(text.as_bytes());
-                let clean_text = parser.screen().contents();
+                // 使用TerminalEmulator处理SSH输出
+                let terminal_lines = self.terminal_emulator.process_ssh_output(&text);
 
-                crate::app_log!(debug, "SSH", "VT100处理后: {}", clean_text.trim());
-                self.add_output(clean_text);
+                // 记录处理结果
+                let processed_text: String = terminal_lines
+                    .iter()
+                    .map(|line| line.text())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                crate::app_log!(debug, "SSH", "终端模拟器处理后: {}", processed_text.trim());
+
+                // 直接添加格式化的终端行
+                self.add_terminal_lines(terminal_lines);
             } else {
                 // 纯文本，直接显示
                 self.add_output(text);
             }
         }
+    }
+
+    // 渲染单个终端片段（基于VT100属性）
+    fn render_terminal_segment(&self, ui: &mut egui::Ui, segment: &TerminalSegment) {
+        if segment.text.is_empty() {
+            return;
+        }
+
+        // 基于TerminalSegment的属性创建RichText
+        let mut rich_text = egui::RichText::new(&segment.text).font(egui::FontId::monospace(14.0));
+
+        // 应用颜色（优先使用VT100解析的颜色）
+        if let Some(color) = segment.color {
+            rich_text = rich_text.color(color);
+        } else {
+            // 回退到基于内容的颜色判断（兼容性）
+            let line_text = &segment.text;
+            if line_text.starts_with("$ ") {
+                // 命令行 - 青色
+                rich_text = rich_text.color(egui::Color32::from_rgb(86, 182, 194));
+            } else if line_text.contains("错误")
+                || line_text.contains("失败")
+                || line_text.contains("Error")
+            {
+                // 错误信息 - 红色
+                rich_text = rich_text.color(egui::Color32::from_rgb(224, 108, 117));
+            } else if line_text.contains("连接") || line_text.contains("成功") {
+                // 成功信息 - 绿色
+                rich_text = rich_text.color(egui::Color32::from_rgb(152, 195, 121));
+            } else if line_text.contains("正在") || line_text.contains("...") {
+                // 进度信息 - 黄色
+                rich_text = rich_text.color(egui::Color32::from_rgb(229, 192, 123));
+            } else {
+                // 普通输出 - 默认颜色
+                rich_text = rich_text.color(egui::Color32::from_rgb(171, 178, 191));
+            }
+        }
+
+        // 应用背景色
+        if let Some(bg_color) = segment.background_color {
+            rich_text = rich_text.background_color(bg_color);
+        }
+
+        // 应用文本样式
+        if segment.bold {
+            rich_text = rich_text.strong();
+        }
+        if segment.italic {
+            rich_text = rich_text.italics();
+        }
+        if segment.underline {
+            rich_text = rich_text.underline();
+        }
+
+        // 处理反显效果
+        if segment.inverse {
+            // 反显：交换前景色和背景色
+            rich_text = rich_text
+                .background_color(egui::Color32::WHITE)
+                .color(egui::Color32::BLACK);
+        }
+
+        // 渲染标签
+        ui.add(egui::Label::new(rich_text).wrap());
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -238,7 +331,7 @@ impl TerminalPanel {
                             // 清屏按钮 - 现代扁平设计
                             let clear_btn = ui.add(
                                 egui::Button::new(
-                                    egui::RichText::new(format!("{}", regular::ERASER)).size(14.0),
+                                    egui::RichText::new(regular::ERASER.to_string()).size(14.0),
                                 )
                                 .fill(egui::Color32::from_rgb(52, 53, 65)) // 深灰色
                                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 70)))
@@ -254,7 +347,7 @@ impl TerminalPanel {
                             // 重连按钮 - GitHub风格
                             let reconnect_btn = ui.add(
                                 egui::Button::new(
-                                    egui::RichText::new(format!("{}", regular::ARROW_CLOCKWISE))
+                                    egui::RichText::new(regular::ARROW_CLOCKWISE.to_string())
                                         .size(14.0),
                                 )
                                 .fill(egui::Color32::from_rgb(13, 110, 253)) // Bootstrap蓝色
@@ -367,7 +460,7 @@ impl TerminalPanel {
                         let send_btn = ui.add_sized(
                             [80.0, 40.0],
                             egui::Button::new(
-                                egui::RichText::new(format!("{}", regular::PAPER_PLANE_TILT))
+                                egui::RichText::new(regular::PAPER_PLANE_TILT.to_string())
                                     .size(16.0)
                                     .color(egui::Color32::WHITE),
                             )
@@ -403,76 +496,14 @@ impl TerminalPanel {
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                                // 现代化终端输出样式
-                                for line in &self.output_buffer {
+                                // 新架构：基于TerminalSegment属性渲染
+                                for terminal_line in &self.output_buffer {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.spacing_mut().item_spacing.x = 0.0;
 
-                                        // 现代终端颜色方案 - 参考One Dark Pro
-                                        if line.starts_with("$ ") {
-                                            // 命令行 - 青色
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(14.0))
-                                                        .color(egui::Color32::from_rgb(
-                                                            86, 182, 194,
-                                                        )), // 青色
-                                                )
-                                                .wrap(),
-                                            );
-                                        } else if line.contains("错误")
-                                            || line.contains("失败")
-                                            || line.contains("Error")
-                                        {
-                                            // 错误信息 - 红色
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(14.0))
-                                                        .color(egui::Color32::from_rgb(
-                                                            224, 108, 117,
-                                                        )), // 柔和红色
-                                                )
-                                                .wrap(),
-                                            );
-                                        } else if line.contains("连接") || line.contains("成功")
-                                        {
-                                            // 成功信息 - 绿色
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(14.0))
-                                                        .color(egui::Color32::from_rgb(
-                                                            152, 195, 121,
-                                                        )), // 柔和绿色
-                                                )
-                                                .wrap(),
-                                            );
-                                        } else if line.contains("正在") || line.contains("...") {
-                                            // 进度信息 - 黄色
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(14.0))
-                                                        .color(egui::Color32::from_rgb(
-                                                            229, 192, 123,
-                                                        )), // 柔和黄色
-                                                )
-                                                .wrap(),
-                                            );
-                                        } else {
-                                            // 普通输出 - 高对比度白色
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(14.0))
-                                                        .color(egui::Color32::from_rgb(
-                                                            171, 178, 191,
-                                                        )), // VS Code默认文本色
-                                                )
-                                                .wrap(),
-                                            );
+                                        // 渲染每个格式化片段
+                                        for segment in &terminal_line.segments {
+                                            self.render_terminal_segment(ui, segment);
                                         }
                                     });
                                 }

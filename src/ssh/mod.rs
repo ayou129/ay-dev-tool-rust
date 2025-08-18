@@ -189,8 +189,7 @@ impl SshConnection {
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
         let mut output = String::new();
-        let mut buffer = Vec::new();
-        buffer.resize(8192, 0);
+        let mut buffer = vec![0; 8192];
 
         // 尝试读取所有可用数据
         match channel.read(&mut buffer) {
