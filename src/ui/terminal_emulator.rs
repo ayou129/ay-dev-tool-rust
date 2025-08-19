@@ -319,12 +319,12 @@ impl TerminalEmulator {
 
     // ======================== 核心处理方法 ========================
 
-    /// 处理SSH原始输出，返回格式化的终端行和可能的提示符更新
-    pub fn process_ssh_output(&mut self, raw_data: &str) -> TerminalProcessResult {
+    /// 处理PTY原始输出，返回格式化的终端行和可能的提示符更新
+    pub fn process_pty_output(&mut self, raw_data: &str) -> TerminalProcessResult {
         // ✅ 解析VT100序列并处理各种动作
         self.parse_and_handle_vt100_actions(raw_data);
         
-        // 累积处理数据，保持屏幕上下文，确保"提示符 + 命令"在同一行
+        // 直接处理PTY数据，保持屏幕上下文
         self.parser.process(raw_data.as_bytes());
 
         // 将VT100解析结果转换为终端逻辑

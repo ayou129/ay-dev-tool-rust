@@ -223,16 +223,16 @@ impl TerminalPanel {
         self.scroll_to_bottom = true;
     }
 
-    // SSH输出处理 - 使用新的分层架构
-    pub fn add_ssh_output(&mut self, text: String) {
+    // PTY输出处理 - 使用新的PTY架构
+    pub fn add_pty_output(&mut self, text: String) {
         if !text.is_empty() {
-            // ✅ 只打印SSH原文数据
-            crate::app_log!(info, "SSH", "SSH原文内容: {:?}", text);
+            // ✅ 打印PTY原文数据
+            crate::app_log!(info, "PTY", "PTY原文内容: {:?}", text);
 
             // 检查是否包含ANSI转义序列
             if text.contains('\x1b') {
-                // 使用TerminalEmulator处理SSH输出
-                let result = self.terminal_emulator.process_ssh_output(&text);
+                // 使用TerminalEmulator处理PTY输出
+                let result = self.terminal_emulator.process_pty_output(&text);
 
                 // 处理提示符更新
                 if let Some(new_prompt) = result.prompt_update {
@@ -250,7 +250,7 @@ impl TerminalPanel {
                 self.output_buffer.clear();
                 self.add_terminal_lines(result.lines);
 
-                // 标记已收到SSH初始输出
+                // 标记已收到初始输出
                 self.has_ssh_initial_output = true;
             } else {
                 // 纯文本，直接显示
@@ -725,8 +725,8 @@ impl TerminalPanel {
                 "initial_output" => {
                     // 处理初始shell输出（欢迎信息和提示符） - 使用VT100解析
                     if let Ok(output) = result.output {
-                        // 使用专门的SSH输出处理方法，会进行VT100解析和提示符提取
-                        self.add_ssh_output(output);
+                        // 使用专门的PTY输出处理方法，会进行VT100解析和提示符提取
+                        self.add_pty_output(output);
                     }
                 }
                 "connect_failed" => {
@@ -753,16 +753,16 @@ impl TerminalPanel {
                 }
 
                 _ => {
-                    // 普通SSH命令处理 - 使用VT100解析
+                    // 普通PTY命令处理 - 使用VT100解析
                     // 注意：命令已在execute_command中显示，这里只显示结果
                     match result.output {
                         Ok(output) => {
                             // 任何返回都交给VT100解析（包括空返回）
-                            self.add_ssh_output(output);
+                            self.add_pty_output(output);
                         }
                         Err(error) => {
-                            // SSH错误信息现在包含实际的命令输出，直接显示
-                            self.add_ssh_output(error);
+                            // PTY错误信息现在包含实际的命令输出，直接显示
+                            self.add_pty_output(error);
                         }
                     }
                 }
