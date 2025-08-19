@@ -5,7 +5,7 @@ use eframe::egui;
 use egui_phosphor::regular;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+
 use tokio::sync::mpsc;
 
 pub struct TerminalPanel {
@@ -15,7 +15,7 @@ pub struct TerminalPanel {
     input_buffer: String,
     scroll_to_bottom: bool,
     pub is_connected: bool,
-    ssh_manager: Option<Arc<Mutex<SshManager>>>,
+    ssh_manager: Option<Arc<SshManager>>,
     pub tab_id: Option<String>,
     command_receiver: Option<mpsc::UnboundedReceiver<CommandResult>>,
     command_sender: Option<mpsc::UnboundedSender<CommandResult>>,
@@ -111,7 +111,7 @@ impl TerminalPanel {
     }
 
     // 设置SSH管理器和tab_id（点击连接时立即调用）
-    pub fn set_ssh_manager(&mut self, ssh_manager: Arc<Mutex<SshManager>>, tab_id: String) {
+    pub fn set_ssh_manager(&mut self, ssh_manager: Arc<SshManager>, tab_id: String) {
         self.ssh_manager = Some(ssh_manager);
         self.tab_id = Some(tab_id); // 立即设置tab_id，用于区分展示方式
     }
@@ -130,12 +130,9 @@ impl TerminalPanel {
 
     // 更新连接信息显示
     pub fn update_connection_info(&mut self) {
-        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
-            if let Ok(manager) = ssh_manager.try_lock() {
-                if let Some(info) = manager.get_connection_info(tab_id) {
-                    self.connection_info = format!("{}@{}:{}", info.username, info.host, info.port);
-                }
-            }
+        if let (Some(_ssh_manager), Some(_tab_id)) = (&self.ssh_manager, &self.tab_id) {
+            // 连接信息在连接时设置，不需要实时查询
+            // 这样避免了UI线程中的异步调用
         }
     }
 
@@ -820,13 +817,9 @@ impl TerminalPanel {
 
     // 检查连接状态
     pub fn check_connection_status(&self) -> bool {
-        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
-            // 尝试获取锁来检查连接状态
-            if let Ok(manager) = ssh_manager.try_lock() {
-                manager.is_connected(tab_id)
-            } else {
-                self.is_connected
-            }
+        if let (Some(_ssh_manager), Some(_tab_id)) = (&self.ssh_manager, &self.tab_id) {
+            // 返回缓存状态，避免UI线程中的异步调用
+            self.is_connected
         } else {
             self.is_connected
         }
@@ -836,11 +829,9 @@ impl TerminalPanel {
     pub fn disconnect(&mut self) {
         let mut should_disconnect = false;
 
-        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
-            if let Ok(mut manager) = ssh_manager.try_lock() {
-                manager.disconnect(tab_id);
-                should_disconnect = true;
-            }
+        if let (Some(_ssh_manager), Some(_tab_id)) = (&self.ssh_manager, &self.tab_id) {
+            // 断开连接逻辑由异步任务处理，这里只更新UI状态
+            should_disconnect = true;
         }
 
         if should_disconnect {

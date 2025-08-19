@@ -207,47 +207,7 @@ macro_rules! app_log {
 //     }
 // }
 
-pub fn log_ssh_connection_success(host: &str, port: u16, username: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.info("SSH", &format!("成功连接到 {}@{}:{}", username, host, port));
-    }
-}
 
-pub fn log_ssh_connection_failed(host: &str, port: u16, username: &str, error: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.error(
-            "SSH",
-            &format!("连接失败 {}@{}:{} - {}", username, host, port, error),
-        );
-    }
-}
-
-pub fn log_ssh_command_execution(command: &str, connection: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.info(
-            "SSH",
-            &format!("执行命令 '{}' 在连接 '{}'", command, connection),
-        );
-    }
-}
-
-pub fn log_ssh_command_success(command: &str, _connection: &str, output_length: usize) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.info(
-            "SSH",
-            &format!(
-                "命令 '{}' 执行成功，输出长度: {} 字符",
-                command, output_length
-            ),
-        );
-    }
-}
-
-pub fn log_ssh_disconnection(connection: &str, reason: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.info("SSH", &format!("连接 '{}' 已断开 - {}", connection, reason));
-    }
-}
 
 /// ✅ 清除日志文件内容 - 用于应用启动时清理
 pub fn clear_log_file() {
@@ -265,11 +225,4 @@ pub fn clear_log_file() {
     }
 }
 
-pub fn log_ssh_authentication_method(username: &str, auth_type: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.debug(
-            "SSH",
-            &format!("用户 '{}' 使用 '{}' 认证方式", username, auth_type),
-        );
-    }
-}
+

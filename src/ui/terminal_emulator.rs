@@ -64,7 +64,7 @@ pub struct TerminalEmulator {
     parser: vt100::Parser,
     _width: u16,
     _height: u16,
-    last_line_count: usize,
+
 }
 
 impl TerminalEmulator {
@@ -73,7 +73,6 @@ impl TerminalEmulator {
             parser: vt100::Parser::new(height, width, 0),
             _width: width,
             _height: height,
-            last_line_count: 0,
         }
     }
 

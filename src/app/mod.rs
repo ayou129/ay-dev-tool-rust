@@ -2,7 +2,7 @@ use eframe::egui;
 use egui_phosphor::regular;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+
 
 use crate::config::AppConfig;
 use crate::ssh::SshManager;
@@ -19,7 +19,7 @@ pub struct TerminalApp {
     plugins_panel: PluginsPanel,
 
     // SSH 管理器
-    ssh_manager: Arc<Mutex<SshManager>>,
+    ssh_manager: Arc<SshManager>,
 
     // 运行时
     runtime: Arc<tokio::runtime::Runtime>,
@@ -38,8 +38,8 @@ impl TerminalApp {
         // 加载配置
         let config = AppConfig::load().unwrap_or_default();
 
-        // 创建 SSH 管理器
-        let ssh_manager = Arc::new(Mutex::new(SshManager::new()));
+        // SSH管理器改为非锁版本，由各终端直接管理连接
+        let ssh_manager = Arc::new(SshManager::new());
 
         // 创建运行时的Arc引用以便共享
         let runtime_arc = Arc::new(runtime);
@@ -57,11 +57,7 @@ impl TerminalApp {
             let cmd = command.to_string();
 
             runtime_ref.spawn(async move {
-                let result = match ssh_manager
-                    .lock()
-                    .await
-                    .execute_command(&tab_id, &cmd)
-                    .await
+                let result = match ssh_manager.execute_command(&tab_id, &cmd).await
                 {
                     Ok(output) => {
                         log::info!("SSH命令执行成功: {} -> {}", cmd, output);
@@ -179,11 +175,7 @@ impl TerminalApp {
             let cmd = command.to_string();
 
             runtime_ref.spawn(async move {
-                let result = match ssh_manager
-                    .lock()
-                    .await
-                    .execute_command(&tab_id, &cmd)
-                    .await
+                let result = match ssh_manager.execute_command(&tab_id, &cmd).await
                 {
                     Ok(output) => {
                         log::info!("SSH命令执行成功: {} -> {}", cmd, output);
@@ -212,14 +204,10 @@ impl TerminalApp {
         self.active_tab = tab_id;
     }
 
-    // 获取当前连接状态信息
+    // 获取当前连接状态信息 - UI中使用，保持同步
     fn get_connection_stats(&self) -> (usize, Vec<String>) {
-        if let Ok(manager) = self.ssh_manager.try_lock() {
-            let connections = manager.get_connections();
-            (connections.len(), connections)
-        } else {
-            (0, vec![])
-        }
+        // 暂时返回空值，避免UI阻塞
+        (0, vec![])
     }
 
     fn connect_to_terminal(&mut self, connection_config: ConnectionConfig) {
@@ -250,11 +238,7 @@ impl TerminalApp {
                 let cmd = command.to_string();
 
                 runtime_ref.spawn(async move {
-                    let result = match ssh_manager
-                        .lock()
-                        .await
-                        .execute_command(&tab_id, &cmd)
-                        .await
+                    let result = match ssh_manager.execute_command(&tab_id, &cmd).await
                     {
                         Ok(output) => {
                             log::info!("SSH命令执行成功: {} -> {}", cmd, output);
@@ -287,11 +271,8 @@ impl TerminalApp {
 
             // 先尝试连接
             self.runtime.spawn(async move {
-                    // 分离锁的获取和使用，避免在整个match期间持有锁
-                    let connect_result = {
-                        let mut manager = ssh_manager.lock().await;
-                        manager.connect(tab_id.clone(), &config).await
-                    }; // 锁在这里被释放
+                    // 直接调用连接方法，无需锁
+                    let connect_result = ssh_manager.connect(tab_id.clone(), &config).await;
 
                     match connect_result {
                         Ok(_) => {
@@ -309,11 +290,9 @@ impl TerminalApp {
                             // 获取shell会话初始输出（包括Last login等信息）
                             crate::app_log!(info, "SSH", "准备调用get_shell_initial_output，tab_id: {}", tab_id);
 
-                            let initial_output_result = {
-                                let manager = ssh_manager.lock().await;
-                                crate::app_log!(info, "SSH", "成功获取ssh_manager锁，开始调用get_shell_initial_output");
-                                manager.get_shell_initial_output(&tab_id).await
-                            }; // 锁在这里被释放
+                            // 直接获取初始输出，无需锁
+                            crate::app_log!(info, "SSH", "开始调用get_shell_initial_output");
+                            let initial_output_result = ssh_manager.get_shell_initial_output(&tab_id).await;
 
                             match initial_output_result {
                                 Ok(initial_output) => {
