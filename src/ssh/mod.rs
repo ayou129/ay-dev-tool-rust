@@ -8,9 +8,8 @@ use tokio::sync::Mutex;
 
 use crate::ui::ConnectionConfig;
 use crate::utils::logger::{
-    log_ssh_authentication_method, log_ssh_command_execution, log_ssh_command_failed,
-    log_ssh_command_success, log_ssh_connection_failed, log_ssh_connection_success,
-    log_ssh_disconnection,
+    log_ssh_authentication_method, log_ssh_command_execution, log_ssh_command_success,
+    log_ssh_connection_failed, log_ssh_connection_success, log_ssh_disconnection,
 };
 
 pub struct SshConnection {
@@ -112,7 +111,11 @@ impl SshConnection {
             crate::app_log!(warn, "SSH", "设置 LC_ALL 环境变量失败: {}", e);
         }
         shell_channel.shell()?;
-        crate::app_log!(info, "SSH", "已创建持久shell channel (TERM=xterm-256color, LANG/LC_ALL 通过 setenv 尝试设置)");
+        crate::app_log!(
+            info,
+            "SSH",
+            "已创建持久shell channel (TERM=xterm-256color, LANG/LC_ALL 通过 setenv 尝试设置)"
+        );
 
         Ok(Self {
             session,
@@ -132,7 +135,7 @@ impl SshConnection {
 
         // 🔥 新设计：每个命令使用独立的channel，像iTerm2一样
         let mut channel = self.session.channel_session()?;
-        
+
         // 设置环境以保持一致性
         channel.request_pty("xterm-256color", None, None)?;
         if let Err(_) = channel.setenv("LANG", "en_US.UTF-8") {
@@ -141,40 +144,46 @@ impl SshConnection {
         if let Err(_) = channel.setenv("LC_ALL", "en_US.UTF-8") {
             // 忽略setenv失败
         }
-        
+
         // 直接执行命令（不是shell模式）
         channel.exec(command)?;
-        
+
         crate::app_log!(debug, "SSH", "创建独立channel执行命令: {}", command);
 
         // 使用SSH2的标准读取方式
         let mut output = String::new();
-        
+
         // 使用BufReader进行高效读取
         use std::io::BufRead;
         let mut reader = std::io::BufReader::new(&mut channel);
         let mut line = String::new();
-        
+
         crate::app_log!(debug, "SSH", "开始读取命令输出");
-        
+
         // 逐行读取直到EOF
         while reader.read_line(&mut line)? > 0 {
             output.push_str(&line);
             crate::app_log!(debug, "SSH", "读取一行: {} 字节", line.len());
             line.clear();
         }
-        
+
         crate::app_log!(debug, "SSH", "读取完成，等待通道关闭");
-        
+
         // 等待命令执行完毕
         channel.wait_close()?;
         let exit_status = channel.exit_status().unwrap_or(-1);
-        
+
         crate::app_log!(debug, "SSH", "命令执行完成，退出状态: {}", exit_status);
 
         log_ssh_command_success(command, &connection_id, output.len());
-        crate::app_log!(debug, "SSH", "命令执行成功: '{}' -> {} 字符", command, output.len());
-        
+        crate::app_log!(
+            debug,
+            "SSH",
+            "命令执行成功: '{}' -> {} 字符",
+            command,
+            output.len()
+        );
+
         Ok(output)
     }
 

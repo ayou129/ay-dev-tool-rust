@@ -190,7 +190,11 @@ impl TerminalEmulator {
         let prompt_update = if cursor_row > 1 {
             let prompt_line = self.extract_line_from_screen(cursor_row - 1, &screen);
             let text = prompt_line.text().trim().to_string();
-            if !text.is_empty() && !text.starts_with("Last login") { Some(text) } else { None }
+            if !text.is_empty() && !text.starts_with("Last login") {
+                Some(text)
+            } else {
+                None
+            }
         } else if !self.icon_name().is_empty() {
             Some(self.icon_name().to_string())
         } else if !self.title().is_empty() {
@@ -302,7 +306,9 @@ impl TerminalEmulator {
                 // ✅ 处理空单元格 - 始终添加空格以保持列对齐
                 // 如果属性变化，先保存当前segment
                 let empty_attrs = TerminalSegment::default();
-                if self.attributes_changed(&current_segment, &empty_attrs) && !current_segment.text.is_empty() {
+                if self.attributes_changed(&current_segment, &empty_attrs)
+                    && !current_segment.text.is_empty()
+                {
                     line.segments.push(current_segment);
                     current_segment = empty_attrs;
                 }
@@ -321,7 +327,7 @@ impl TerminalEmulator {
             empty_segment.text = " ".repeat(screen_width as usize);
             line.segments.push(empty_segment);
         }
-        
+
         line
     }
 
@@ -351,25 +357,25 @@ impl TerminalEmulator {
                 // 标准256色映射 - 改进版本，支持更多颜色
                 match idx {
                     // 标准8色 (30-37)
-                    0 => Some(egui::Color32::from_rgb(0, 0, 0)),         // 黑色
-                    1 => Some(egui::Color32::from_rgb(205, 49, 49)),     // 红色
-                    2 => Some(egui::Color32::from_rgb(13, 188, 121)),    // 绿色
-                    3 => Some(egui::Color32::from_rgb(229, 229, 16)),    // 黄色
-                    4 => Some(egui::Color32::from_rgb(36, 114, 200)),    // 蓝色
-                    5 => Some(egui::Color32::from_rgb(188, 63, 188)),    // 紫色
-                    6 => Some(egui::Color32::from_rgb(17, 168, 205)),    // 青色 - 这是ls中文件夹的颜色
-                    7 => Some(egui::Color32::from_rgb(229, 229, 229)),   // 白色
-                    
+                    0 => Some(egui::Color32::from_rgb(0, 0, 0)), // 黑色
+                    1 => Some(egui::Color32::from_rgb(205, 49, 49)), // 红色
+                    2 => Some(egui::Color32::from_rgb(13, 188, 121)), // 绿色
+                    3 => Some(egui::Color32::from_rgb(229, 229, 16)), // 黄色
+                    4 => Some(egui::Color32::from_rgb(36, 114, 200)), // 蓝色
+                    5 => Some(egui::Color32::from_rgb(188, 63, 188)), // 紫色
+                    6 => Some(egui::Color32::from_rgb(17, 168, 205)), // 青色 - 这是ls中文件夹的颜色
+                    7 => Some(egui::Color32::from_rgb(229, 229, 229)), // 白色
+
                     // 高亮8色 (90-97)
-                    8 => Some(egui::Color32::from_rgb(102, 102, 102)),   // 亮黑色
-                    9 => Some(egui::Color32::from_rgb(241, 76, 76)),     // 亮红色
-                    10 => Some(egui::Color32::from_rgb(35, 209, 139)),   // 亮绿色
-                    11 => Some(egui::Color32::from_rgb(245, 245, 67)),   // 亮黄色
-                    12 => Some(egui::Color32::from_rgb(59, 142, 234)),   // 亮蓝色
+                    8 => Some(egui::Color32::from_rgb(102, 102, 102)), // 亮黑色
+                    9 => Some(egui::Color32::from_rgb(241, 76, 76)),   // 亮红色
+                    10 => Some(egui::Color32::from_rgb(35, 209, 139)), // 亮绿色
+                    11 => Some(egui::Color32::from_rgb(245, 245, 67)), // 亮黄色
+                    12 => Some(egui::Color32::from_rgb(59, 142, 234)), // 亮蓝色
                     13 => Some(egui::Color32::from_rgb(214, 112, 214)), // 亮紫色
-                    14 => Some(egui::Color32::from_rgb(41, 184, 219)),   // 亮青色
-                    15 => Some(egui::Color32::from_rgb(255, 255, 255)),  // 亮白色
-                    
+                    14 => Some(egui::Color32::from_rgb(41, 184, 219)), // 亮青色
+                    15 => Some(egui::Color32::from_rgb(255, 255, 255)), // 亮白色
+
                     // 扩展颜色支持 (16-255)
                     16..=231 => {
                         // 216色立方体

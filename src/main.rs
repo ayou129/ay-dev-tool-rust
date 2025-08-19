@@ -17,16 +17,16 @@ fn setup_custom_fonts(ctx: &egui::Context) {
     if cfg!(windows) {
         // Windows 等宽字体路径（按优先级排序）
         let monospace_fonts = [
-            ("C:\\Windows\\Fonts\\consola.ttf", "Consolas"),           // 最佳等宽字体
-            ("C:\\Windows\\Fonts\\cour.ttf", "Courier New"),          // 经典等宽字体
-            ("C:\\Windows\\Fonts\\lucon.ttf", "Lucida Console"),      // 系统等宽字体
+            ("C:\\Windows\\Fonts\\consola.ttf", "Consolas"), // 最佳等宽字体
+            ("C:\\Windows\\Fonts\\cour.ttf", "Courier New"), // 经典等宽字体
+            ("C:\\Windows\\Fonts\\lucon.ttf", "Lucida Console"), // 系统等宽字体
         ];
 
         // 中文支持字体
         let chinese_fonts = [
-            ("C:\\Windows\\Fonts\\msyh.ttc", "Microsoft YaHei"),      // 微软雅黑
-            ("C:\\Windows\\Fonts\\simsun.ttc", "SimSun"),             // 宋体
-            ("C:\\Windows\\Fonts\\simhei.ttf", "SimHei"),             // 黑体
+            ("C:\\Windows\\Fonts\\msyh.ttc", "Microsoft YaHei"), // 微软雅黑
+            ("C:\\Windows\\Fonts\\simsun.ttc", "SimSun"),        // 宋体
+            ("C:\\Windows\\Fonts\\simhei.ttf", "SimHei"),        // 黑体
         ];
 
         // 1. 优先加载等宽字体
@@ -53,7 +53,7 @@ fn setup_custom_fonts(ctx: &egui::Context) {
         for (i, (font_path, font_name)) in chinese_fonts.iter().enumerate() {
             if let Ok(font_data) = std::fs::read(font_path) {
                 let chinese_font_id = format!("chinese_font_{}", i);
-                
+
                 fonts.font_data.insert(
                     chinese_font_id.clone(),
                     egui::FontData::from_owned(font_data).into(),
@@ -81,22 +81,21 @@ fn setup_custom_fonts(ctx: &egui::Context) {
 
     // ✅ 设置终端专用的字体大小和间距
     ctx.set_fonts(fonts);
-    
+
     // 优化全局样式以支持终端渲染
     let mut style = (*ctx.style()).clone();
-    
+
     // 确保等宽字体的字符间距为0
-    style.text_styles.insert(
-        egui::TextStyle::Monospace,
-        egui::FontId::monospace(14.0),
-    );
-    
+    style
+        .text_styles
+        .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
+
     // 优化终端专用样式
     style.spacing.item_spacing = egui::vec2(0.0, 6.0); // 水平无间距，垂直适中
     style.spacing.button_padding = egui::vec2(8.0, 4.0);
-    
+
     ctx.set_style(style);
-    
+
     log::info!("字体配置完成 - 等宽字体优先，支持中文");
 }
 

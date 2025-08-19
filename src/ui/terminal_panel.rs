@@ -23,12 +23,10 @@ pub struct TerminalPanel {
     ssh_command_executor:
         Option<Box<dyn Fn(&str, &str, mpsc::UnboundedSender<CommandResult>) + Send + Sync>>, // SSH命令执行回调
     terminal_emulator: TerminalEmulator, // 终端模拟器
-    // ✅ 全选和复制功能状态
-    is_all_selected: bool, // 是否已全选
-    has_ssh_initial_output: bool, // 是否已收到SSH初始输出
+    has_ssh_initial_output: bool,        // 是否已收到SSH初始输出
     // 内联输入相关状态
     inline_input_active: bool, // 是否激活内联输入模式
-    cursor_blink_time: f64, // 光标闪烁计时器
+    cursor_blink_time: f64,    // 光标闪烁计时器
 }
 
 // 手动实现Debug trait
@@ -46,7 +44,6 @@ impl std::fmt::Debug for TerminalPanel {
             .field("current_prompt", &self.current_prompt)
             .field("ssh_command_executor", &"Function(hidden)") // 隐藏函数的内部细节
             .field("terminal_emulator", &"TerminalEmulator(hidden)") // 隐藏终端模拟器的内部细节
-            .field("is_all_selected", &self.is_all_selected) // ✅ 添加新字段
             .field("has_ssh_initial_output", &self.has_ssh_initial_output) // ✅ 添加新字段
             .field("inline_input_active", &self.inline_input_active)
             .field("cursor_blink_time", &self.cursor_blink_time)
@@ -80,7 +77,6 @@ impl Clone for TerminalPanel {
             current_prompt: self.current_prompt.clone(),
             ssh_command_executor: None, // 克隆时不复制函数
             terminal_emulator: TerminalEmulator::new(200, 50), // 创建新的终端模拟器
-            is_all_selected: false, // ✅ 添加新字段
             has_ssh_initial_output: false, // 初始化为未收到SSH输出
             inline_input_active: false,
             cursor_blink_time: 0.0,
@@ -108,8 +104,7 @@ impl TerminalPanel {
             current_prompt: "❯".to_string(), // 默认提示符
             ssh_command_executor: None,      // 初始化时为空，稍后设置
             terminal_emulator: TerminalEmulator::new(200, 50), // 创建终端模拟器
-            is_all_selected: false, // ✅ 初始化为未选中状态
-            has_ssh_initial_output: false, // 初始化为未收到SSH输出
+            has_ssh_initial_output: false,   // 初始化为未收到SSH输出
             inline_input_active: false,
             cursor_blink_time: 0.0,
         }
@@ -162,37 +157,6 @@ impl TerminalPanel {
         }
     }
 
-    // ✅ 全选功能：选择所有终端内容
-    pub fn select_all(&mut self) {
-        self.is_all_selected = true;
-        crate::app_log!(debug, "Terminal", "全选终端内容");
-    }
-
-    // ✅ 复制功能：复制选中的终端内容到剪贴板
-    pub fn copy_to_clipboard(&mut self, ui: &mut egui::Ui) {
-        if self.is_all_selected {
-            // 将所有终端内容转换为纯文本
-            let all_text = self.get_all_text();
-            
-            // 复制到剪贴板
-            ui.ctx().copy_text(all_text.clone());
-            
-            crate::app_log!(info, "Terminal", "已复制 {} 行内容到剪贴板", self.output_buffer.len());
-            
-            // 复制后取消选择
-            self.is_all_selected = false;
-        }
-    }
-
-    // ✅ 获取所有终端内容的纯文本
-    pub fn get_all_text(&self) -> String {
-        self.output_buffer
-            .iter()
-            .map(|line| line.text())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     pub fn add_output(&mut self, text: String) {
         // ✅ 将文本转换为TerminalLine，正确处理制表符和换行符
         for line_text in text.split('\n') {
@@ -226,7 +190,7 @@ impl TerminalPanel {
     fn process_tab_alignment(&self, text: &str) -> String {
         let mut result = String::new();
         let mut col = 0;
-        
+
         for ch in text.chars() {
             if ch == '\t' {
                 // 制表符：对齐到8的倍数列位置
@@ -242,7 +206,7 @@ impl TerminalPanel {
                 col += 1;
             }
         }
-        
+
         result
     }
 
@@ -294,7 +258,7 @@ impl TerminalPanel {
 
                 // 添加格式化的终端行（不包含提示符）
                 self.add_terminal_lines(result.lines);
-                
+
                 // 标记已收到SSH初始输出
                 self.has_ssh_initial_output = true;
             } else {
@@ -303,8 +267,6 @@ impl TerminalPanel {
             }
         }
     }
-
-
 
     // 改进的字符网格方案：增加间距并保持颜色
     /// ✅ 完美字符网格渲染 - 解决对齐问题的最终方案
@@ -315,8 +277,12 @@ impl TerminalPanel {
 
         // 检查是否为纯文本行（无样式）
         let is_plain_text = line.segments.iter().all(|s| {
-            s.color.is_none() && s.background_color.is_none() 
-            && !s.bold && !s.italic && !s.underline && !s.inverse
+            s.color.is_none()
+                && s.background_color.is_none()
+                && !s.bold
+                && !s.italic
+                && !s.underline
+                && !s.inverse
         });
 
         if is_plain_text {
@@ -326,9 +292,9 @@ impl TerminalPanel {
                 egui::Label::new(
                     egui::RichText::new(line_text)
                         .font(egui::FontId::monospace(14.0))
-                        .color(egui::Color32::BLACK)
+                        .color(egui::Color32::BLACK),
                 )
-                .selectable(true)
+                .selectable(true),
             );
         } else {
             // ✅ 方案B：彩色文本使用无间距水平布局
@@ -337,28 +303,28 @@ impl TerminalPanel {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
                 ui.spacing_mut().indent = 0.0;
-                
+
                 for segment in &line.segments {
                     if segment.text.is_empty() {
                         continue;
                     }
-                    
+
                     // 创建富文本
-                    let mut rich_text = egui::RichText::new(&segment.text)
-                        .font(egui::FontId::monospace(14.0));
-                    
+                    let mut rich_text =
+                        egui::RichText::new(&segment.text).font(egui::FontId::monospace(14.0));
+
                     // 应用颜色
                     if let Some(color) = segment.color {
                         rich_text = rich_text.color(color);
                     } else {
                         rich_text = rich_text.color(egui::Color32::BLACK);
                     }
-                    
+
                     // 应用背景色
                     if let Some(bg_color) = segment.background_color {
                         rich_text = rich_text.background_color(bg_color);
                     }
-                    
+
                     // 应用文本样式
                     if segment.bold {
                         rich_text = rich_text.strong();
@@ -369,14 +335,14 @@ impl TerminalPanel {
                     if segment.underline {
                         rich_text = rich_text.underline();
                     }
-                    
+
                     // 处理反显
                     if segment.inverse {
                         rich_text = rich_text
                             .background_color(egui::Color32::BLACK)
                             .color(egui::Color32::WHITE);
                     }
-                    
+
                     // 渲染segment
                     ui.add(egui::Label::new(rich_text).selectable(true));
                 }
@@ -471,7 +437,10 @@ impl TerminalPanel {
                                     egui::RichText::new(regular::ERASER.to_string()).size(14.0),
                                 )
                                 .fill(egui::Color32::from_rgb(240, 240, 240))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgb(200, 200, 200),
+                                ))
                                 .corner_radius(egui::CornerRadius::same(6)),
                             );
 
@@ -514,20 +483,8 @@ impl TerminalPanel {
 
     /// ✅ 渲染终端输出区域
     fn render_terminal_output_area(&mut self, ui: &mut egui::Ui) {
-        // ✅ 处理全选和复制快捷键
-        if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::A)) {
-            self.select_all();
-        }
-        if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::C)) {
-            self.copy_to_clipboard(ui);
-        }
-
         // 终端背景 - 白底
-        let terminal_bg_color = if self.is_all_selected {
-            egui::Color32::from_rgb(200, 225, 255)
-        } else {
-            egui::Color32::WHITE
-        };
+        let terminal_bg_color = egui::Color32::WHITE;
 
         let rect = ui.available_rect_before_wrap();
         // 边框
@@ -537,19 +494,16 @@ impl TerminalPanel {
             egui::Stroke::new(1.0, egui::Color32::from_rgb(210, 210, 210)),
             egui::StrokeKind::Outside,
         );
-        ui.painter().rect_filled(rect.shrink(1.0), egui::CornerRadius::same(4), terminal_bg_color);
+        ui.painter().rect_filled(
+            rect.shrink(1.0),
+            egui::CornerRadius::same(4),
+            terminal_bg_color,
+        );
 
         // 右键菜单和点击处理（不再占用布局空间）
         let area_id = ui.id().with("terminal_area");
         let response = ui.interact(rect, area_id, egui::Sense::click());
-        
-        // 左键点击取消全选
-        if response.clicked() {
-            if self.is_all_selected {
-                self.is_all_selected = false;
-            }
-        }
-        
+
         response.context_menu(|ui| {
             ui.set_style(std::sync::Arc::new(egui::Style {
                 visuals: egui::Visuals {
@@ -561,101 +515,92 @@ impl TerminalPanel {
                 ..ui.style().as_ref().clone()
             }));
 
-                if ui.button("🔍 全选 (Ctrl+A)").clicked() {
-                    self.select_all();
-                    ui.close();
-                }
+            if ui.button("📋 复制全部内容").clicked() {
+                self.copy_all_to_clipboard(ui);
+                ui.close();
+            }
 
-                if ui.button("📋 复制 (Ctrl+C)").clicked() {
-                    if !self.is_all_selected {
-                        self.select_all();
-                    }
-                    self.copy_to_clipboard(ui);
-                    ui.close();
-                }
+            ui.separator();
 
-                ui.separator();
+            if ui.button("🗑️ 清空终端").clicked() {
+                self.output_buffer.clear();
+                ui.close();
+            }
+        });
 
-                if ui.button("🗑️ 清空终端").clicked() {
-                    self.output_buffer.clear();
-                    self.is_all_selected = false;
-                    ui.close();
-                }
-            });
-
-            // 现代化边距和滚动（轻主题右键菜单样式）- 增加外边距
-            egui::Frame::NONE
-                .inner_margin(egui::Margin::symmetric(24, 20)) // 增加外边距
-                .outer_margin(egui::Margin::symmetric(8, 6))   // 添加外边距
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .stick_to_bottom(true)
-                        .auto_shrink([false; 2])
-                        .show(ui, |ui| {
-                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                                // 新架构：基于TerminalSegment属性渲染
-                                // 选择“锚点行”：从末尾向前找第一条非空行（常为 (base) ➜  ~）
-                                let len = self.output_buffer.len();
-                                let mut anchor_idx: Option<usize> = None;
-                                for i in (0..len).rev() {
-                                    if let Some(line) = self.output_buffer.get(i) {
-                                        if !line.text().trim().is_empty() {
-                                            anchor_idx = Some(i);
-                                            break;
-                                        }
+        // 现代化边距和滚动（轻主题右键菜单样式）- 增加外边距
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(24, 20)) // 增加外边距
+            .outer_margin(egui::Margin::symmetric(8, 6)) // 添加外边距
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            // 新架构：基于TerminalSegment属性渲染
+                            // 选择“锚点行”：从末尾向前找第一条非空行（常为 (base) ➜  ~）
+                            let len = self.output_buffer.len();
+                            let mut anchor_idx: Option<usize> = None;
+                            for i in (0..len).rev() {
+                                if let Some(line) = self.output_buffer.get(i) {
+                                    if !line.text().trim().is_empty() {
+                                        anchor_idx = Some(i);
+                                        break;
                                     }
                                 }
+                            }
 
-                                let (before_anchor, anchor_line_opt) = if let Some(i) = anchor_idx {
-                                    (
-                                        self.output_buffer
-                                            .iter()
-                                            .take(i)
-                                            .cloned()
-                                            .collect::<Vec<_>>(),
-                                        self.output_buffer.get(i).cloned(),
-                                    )
-                                } else {
-                                    (Vec::new(), None)
-                                };
+                            let (before_anchor, anchor_line_opt) = if let Some(i) = anchor_idx {
+                                (
+                                    self.output_buffer
+                                        .iter()
+                                        .take(i)
+                                        .cloned()
+                                        .collect::<Vec<_>>(),
+                                    self.output_buffer.get(i).cloned(),
+                                )
+                            } else {
+                                (Vec::new(), None)
+                            };
 
-                                for terminal_line in before_anchor {
-                                    // ✅ 使用新的完美字符网格渲染
-                                    self.render_terminal_line_grid_improved(ui, &terminal_line);
-                                }
+                            for terminal_line in before_anchor {
+                                // ✅ 使用新的完美字符网格渲染
+                                self.render_terminal_line_grid_improved(ui, &terminal_line);
+                            }
 
-                                if let Some(anchor_line) = anchor_line_opt {
-                                    // ✅ 渲染最后一行（提示符行）并添加内联输入
-                                    self.render_terminal_line_with_inline_input(ui, &anchor_line);
-                                }
+                            if let Some(anchor_line) = anchor_line_opt {
+                                // ✅ 渲染最后一行（提示符行）并添加内联输入
+                                self.render_terminal_line_with_inline_input(ui, &anchor_line);
+                            }
 
-                                // 现代化欢迎界面
-                                if self.output_buffer.is_empty() {
-                                    ui.vertical_centered(|ui| {
-                                        ui.add_space(60.0);
-                                        ui.label(
-                                            egui::RichText::new("🚀 终端已就绪")
-                                                .font(egui::FontId::proportional(18.0))
-                                                .color(egui::Color32::from_rgb(86, 182, 194)),
-                                        );
-                                        ui.add_space(12.0);
-                                        ui.label(
-                                            egui::RichText::new("在下方输入命令开始使用")
-                                                .font(egui::FontId::proportional(14.0))
-                                                .color(egui::Color32::from_rgb(171, 178, 191)),
-                                        );
-                                        ui.add_space(12.0);
-                                        ui.label(
-                                            egui::RichText::new("💡 右键菜单：全选、复制、清空")
-                                                .font(egui::FontId::proportional(12.0))
-                                                .color(egui::Color32::from_rgb(128, 128, 128)),
-                                        );
-                                    });
-                                }
-                            });
+                            // 现代化欢迎界面
+                            if self.output_buffer.is_empty() {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(60.0);
+                                    ui.label(
+                                        egui::RichText::new("🚀 终端已就绪")
+                                            .font(egui::FontId::proportional(18.0))
+                                            .color(egui::Color32::from_rgb(86, 182, 194)),
+                                    );
+                                    ui.add_space(12.0);
+                                    ui.label(
+                                        egui::RichText::new("在下方输入命令开始使用")
+                                            .font(egui::FontId::proportional(14.0))
+                                            .color(egui::Color32::from_rgb(171, 178, 191)),
+                                    );
+                                    ui.add_space(12.0);
+                                    ui.label(
+                                        egui::RichText::new("💡 右键菜单：全选、复制、清空")
+                                            .font(egui::FontId::proportional(12.0))
+                                            .color(egui::Color32::from_rgb(128, 128, 128)),
+                                    );
+                                });
+                            }
                         });
-                });
-        }
+                    });
+            });
+    }
 
     /// ✅ 渲染带有内联输入的终端行（用于最后一行提示符）
     fn render_terminal_line_with_inline_input(&mut self, ui: &mut egui::Ui, line: &TerminalLine) {
@@ -663,69 +608,51 @@ impl TerminalPanel {
             return;
         }
 
-        ui.horizontal(|ui| {
-            // 首先渲染提示符和已有内容
-            if !line.is_empty() {
-                for segment in &line.segments {
-                    let mut rich_text = egui::RichText::new(&segment.text)
-                        .font(egui::FontId::monospace(14.0));
+        // 首先使用现有的完整颜色渲染逻辑渲染提示符行
+        if !line.is_empty() {
+            // 复用现有的字符网格渲染，保持完整的VT100颜色和对齐
+            self.render_terminal_line_grid_improved(ui, line);
+        }
 
-                    // 应用颜色
-                    if let Some(color) = segment.color {
-                        rich_text = rich_text.color(color);
-                    } else {
-                        rich_text = rich_text.color(egui::Color32::from_rgb(51, 51, 51));
-                    }
-
-                    // 应用样式
-                    if segment.bold {
-                        rich_text = rich_text.strong();
-                    }
-                    if segment.italic {
-                        rich_text = rich_text.italics();
-                    }
-                    if segment.underline {
-                        rich_text = rich_text.underline();
-                    }
-
-                    // 处理反显
-                    if segment.inverse {
-                        rich_text = rich_text
-                            .background_color(egui::Color32::BLACK)
-                            .color(egui::Color32::WHITE);
-                    }
-
-                    ui.add(egui::Label::new(rich_text).selectable(false));
-                }
-            }
-
-            // 如果连接成功且收到初始输出，显示内联输入
-            if self.is_connected && self.has_ssh_initial_output {
-                // 更新光标闪烁时间
-                self.cursor_blink_time += ui.ctx().input(|i| i.stable_dt as f64);
+        // 如果连接成功且收到初始输出，在同一行添加内联输入
+        if self.is_connected && self.has_ssh_initial_output {
+            ui.horizontal(|ui| {
+                // 完全消除间距以保持字符对齐
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
+                ui.spacing_mut().indent = 0.0;
 
                 // 显示输入内容
                 if !self.input_buffer.is_empty() {
-                    ui.add(egui::Label::new(
-                        egui::RichText::new(&self.input_buffer)
-                            .font(egui::FontId::monospace(14.0))
-                            .color(egui::Color32::from_rgb(0, 102, 153))
-                    ).selectable(false));
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.input_buffer)
+                                .font(egui::FontId::monospace(14.0))
+                                .color(egui::Color32::from_rgb(0, 102, 153)),
+                        )
+                        .selectable(true),
+                    );
                 }
+
+                // 更新光标闪烁时间
+                self.cursor_blink_time += ui.ctx().input(|i| i.stable_dt as f64);
 
                 // 显示闪烁光标
                 if (self.cursor_blink_time % 1.0) < 0.5 {
-                    ui.add(egui::Label::new(
-                        egui::RichText::new("█")
-                            .font(egui::FontId::monospace(14.0))
-                            .color(egui::Color32::from_rgb(0, 102, 153))
-                    ).selectable(false));
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("█")
+                                .font(egui::FontId::monospace(14.0))
+                                .color(egui::Color32::from_rgb(0, 102, 153)),
+                        )
+                        .selectable(false),
+                    );
                 }
+            });
 
-                // 处理键盘输入
-                self.handle_keyboard_input(ui);
-            }
-        });
+            // 处理键盘输入
+            self.handle_keyboard_input(ui);
+        }
 
         ui.add_space(2.0);
     }
@@ -741,26 +668,27 @@ impl TerminalPanel {
                 match event {
                     egui::Event::Text(text) => {
                         // 过滤掉控制字符
-                        let filtered_text: String = text.chars()
+                        let filtered_text: String = text
+                            .chars()
                             .filter(|c| !c.is_control() || *c == '\t')
                             .collect();
                         if !filtered_text.is_empty() {
                             self.input_buffer.push_str(&filtered_text);
                         }
                     }
-                    egui::Event::Key { key, pressed: true, .. } => {
-                        match key {
-                            egui::Key::Enter => {
-                                if !self.input_buffer.trim().is_empty() {
-                                    self.execute_command();
-                                }
+                    egui::Event::Key {
+                        key, pressed: true, ..
+                    } => match key {
+                        egui::Key::Enter => {
+                            if !self.input_buffer.trim().is_empty() {
+                                self.execute_command();
                             }
-                            egui::Key::Backspace => {
-                                self.input_buffer.pop();
-                            }
-                            _ => {}
                         }
-                    }
+                        egui::Key::Backspace => {
+                            self.input_buffer.pop();
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -845,10 +773,9 @@ impl TerminalPanel {
             }
 
             if self.is_connected && self.tab_id.is_some() {
-                // 本地将命令拼接到最后一行提示符右侧，模拟真实终端回显
-                self.append_command_to_last_prompt(command.trim());
+                // ✅ 新流程：直接发送命令给SSH，不做本地处理
+                // 让SSH返回完整的VT100序列，包含命令回显和输出
                 self.scroll_to_bottom = true;
-                // 直接调用SSH命令执行器
                 let tab_id = self.tab_id.clone().unwrap();
                 let cmd = command.trim().to_string();
                 let sender = self.command_sender.clone();
@@ -862,17 +789,24 @@ impl TerminalPanel {
                 self.add_output("错误: 未连接到远程主机".to_string());
             }
 
+            // 清空输入缓冲，等待SSH返回完整结果
             self.input_buffer.clear();
         }
     }
 
-    // 将用户输入的命令附加到最后一行（提示符行）右侧
-    fn append_command_to_last_prompt(&mut self, cmd: &str) {
-        if let Some(last_line) = self.output_buffer.back_mut() {
-            let mut seg = TerminalSegment::default();
-            seg.text = format!(" {}", cmd);
-            seg.color = Some(egui::Color32::from_rgb(0, 102, 153));
-            last_line.segments.push(seg);
+    /// ✅ 复制所有终端内容到剪贴板
+    fn copy_all_to_clipboard(&self, ui: &mut egui::Ui) {
+        let all_text = self
+            .output_buffer
+            .iter()
+            .map(|line| line.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if !all_text.trim().is_empty() {
+            let text_len = all_text.len();
+            ui.ctx().copy_text(all_text);
+            crate::app_log!(info, "Terminal", "已复制 {} 字符到剪贴板", text_len);
         }
     }
 

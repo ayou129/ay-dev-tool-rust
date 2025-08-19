@@ -251,8 +251,11 @@ impl PluginsPanel {
                         if let Some(install_cmd) = software["install_command"].as_str() {
                             if ui
                                 .small_button(
-                                    egui::RichText::new(format!("{} 复制安装命令", regular::DOWNLOAD))
-                                        .size(12.0),
+                                    egui::RichText::new(format!(
+                                        "{} 复制安装命令",
+                                        regular::DOWNLOAD
+                                    ))
+                                    .size(12.0),
                                 )
                                 .on_hover_text(install_cmd)
                                 .clicked()

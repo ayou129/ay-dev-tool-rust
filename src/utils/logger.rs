@@ -103,30 +103,31 @@ impl Logger {
 
         // ✅ 输出到控制台：直接打印到stdout/stderr，不依赖log宏
         if self.console_enabled {
-            let console_output = format!("[{}] [{}] [{}] {}", 
+            let console_output = format!(
+                "[{}] [{}] [{}] {}",
                 entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
                 level,
-                module, 
+                module,
                 message
             );
-            
+
             match level {
                 LogLevel::Error => {
                     eprintln!("{}", console_output);
                     log::error!("[{}] {}", module, message);
-                },
+                }
                 LogLevel::Warn => {
                     println!("{}", console_output);
                     log::warn!("[{}] {}", module, message);
-                },
+                }
                 LogLevel::Info => {
                     println!("{}", console_output);
                     log::info!("[{}] {}", module, message);
-                },
+                }
                 LogLevel::Debug => {
                     println!("{}", console_output);
                     log::debug!("[{}] {}", module, message);
-                },
+                }
             }
         }
 
@@ -239,16 +240,6 @@ pub fn log_ssh_command_success(command: &str, _connection: &str, output_length: 
                 command, output_length
             ),
         );
-    }
-}
-
-pub fn log_ssh_command_failed(command: &str, _connection: &str, error: &str, ssh_output: &str) {
-    if let Ok(logger) = get_logger().lock() {
-        logger.error("SSH", &format!("命令 '{}' 执行失败 - {}", command, error));
-        // ✅ 打印完整的SSH接收信息
-        if !ssh_output.trim().is_empty() {
-            logger.error("SSH", &format!("SSH输出内容: {}", ssh_output.trim()));
-        }
     }
 }
 
