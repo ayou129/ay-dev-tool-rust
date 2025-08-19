@@ -267,12 +267,13 @@ impl TerminalEmulator {
         }
     }
 
-    /// 从屏幕的特定行提取格式化内容
+    /// ✅ 优化的行提取 - 确保完美的字符对齐
     fn extract_line_from_screen(&self, row: u16, screen: &vt100::Screen) -> TerminalLine {
         let mut line = TerminalLine::new();
         let mut current_segment = TerminalSegment::default();
+        let screen_width = screen.size().1;
 
-        for col in 0..screen.size().1 {
+        for col in 0..screen_width {
             if let Some(cell) = screen.cell(row, col) {
                 let ch = cell.contents();
 
@@ -287,23 +288,40 @@ impl TerminalEmulator {
                     current_segment = new_attrs;
                 }
 
-                // 添加字符到当前片段（包括空格字符）
-                current_segment.text.push_str(&ch);
+                // ✅ 处理字符到当前片段（包括制表符对齐）
+                if ch == "\t" {
+                    // 制表符处理：对齐到8的倍数列位置
+                    let current_col = col as usize;
+                    let tab_stop = 8;
+                    let spaces_needed = tab_stop - (current_col % tab_stop);
+                    current_segment.text.push_str(&" ".repeat(spaces_needed));
+                } else {
+                    current_segment.text.push_str(&ch);
+                }
             } else {
-                // 处理空单元格 - 始终添加空格以保持列对齐
+                // ✅ 处理空单元格 - 始终添加空格以保持列对齐
+                // 如果属性变化，先保存当前segment
+                let empty_attrs = TerminalSegment::default();
+                if self.attributes_changed(&current_segment, &empty_attrs) && !current_segment.text.is_empty() {
+                    line.segments.push(current_segment);
+                    current_segment = empty_attrs;
+                }
                 current_segment.text.push(' ');
             }
         }
 
-        // 添加最后一个片段
+        // ✅ 添加最后一个片段（即使是空格也要保留）
         if !current_segment.text.is_empty() {
             line.segments.push(current_segment);
         }
 
-        // 调试：打印解析结果
-        let debug_text: String = line.segments.iter().map(|s| s.text.as_str()).collect();
-        crate::app_log!(debug, "VT100", "行 {} 解析结果: {:?}", row, debug_text);
-
+        // ✅ 确保行不为空 - 至少有一个空segment
+        if line.segments.is_empty() {
+            let mut empty_segment = TerminalSegment::default();
+            empty_segment.text = " ".repeat(screen_width as usize);
+            line.segments.push(empty_segment);
+        }
+        
         line
     }
 

@@ -23,7 +23,7 @@
       - 连接状态管理（断线重连）
       - 会话持久化
       - 需要解决编码问题 中文字符和其他字符
-      - 在输入区域
+      - 输入时
         - 鼠标捕获后，如果按上下 则需要和ssh交互 获取历史记录
         - 提供自动补全（如输入 conda 提示 install）。
         - 支持多行输入（如脚本执行）。
@@ -58,7 +58,7 @@
 🛠️ 核心技术栈
 
 1. UI 层
-    - UI 层：Ratatui + crossterm 实现终端 UI（tab 列表、输入/输出区域），unicode-width 处理中文字符，eframe/egui 实现性能监控（折线图）和软件列表（表格）。
+    - UI 层：Ratatui + unicode-width 处理中文字符，eframe/egui 实现性能监控（折线图）和软件列表（表格）。
     - 使用线程（std::thread 或 tokio）管理 Ratatui 和 egui 窗口。
 2. 网络/SSH 层
    - tokio - 异步运行时（SSH 连接、命令执行）。
