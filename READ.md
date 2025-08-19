@@ -110,27 +110,32 @@
       - current_prompt SSH服务器返回的 ANSI转义序列 的完整信息中的部分信息 例如macos返回的是: `(base) ➜  ~`
       - ...
   - 终端界面细节：
-    - 字符网格方案 参考 iTerm2 的实现
-    - 自然选择功能，例如 鼠标拖动可以选择段落，Ctrl+A 全选，Ctrl+C 复制
-- ANSI转义序列 全部交给 VT100 去解析，配合各个组件实现功能
-  - 信息是在SSH会话建立时立即发送的，不是通过执行命令获取的。
-  - 正确的分层设计：
-    - 层次1：VT100解析器
-      - 职责：解析ANSI序列，提供字符属性
-      - 输出：结构化数据（字符+颜色+样式+位置）
-    - 层次2：终端模拟器 (新增)
-      - 职责：将VT100的解析结果转换为终端逻辑
-      - 功能：
-        - 根据字符属性判断行为（如：反显=填充行）
-        - 将颜色属性转换为UI颜色格式
-        - 处理光标位置、清屏等终端特有逻辑
-    - 层次3：UI组件
-      - 职责：纯粹的渲染，接收格式化好的内容
-      - 不关心：什么是ANSI、什么是反显
-  - 处理思路：
-    1. 将返回的内容 传入VT100核心解析方法 可能解析出 标题、图标、内容、光标位置等，并且可能包含样式
-    2. 将解析出来的 所有字段 调用 终端模拟器 对应的方法，终端模拟器会在内部渲染UI组件
-  - 相关文档： <https://www2.ccs.neu.edu/research/gpc/VonaUtils/vona/terminal/vtansi.htm>
+    - UI
+      - 字符网格方案 参考 iTerm2 的实现
+      - 自然选择功能，例如 鼠标拖动可以选择段落，Ctrl+A 全选，Ctrl+C 复制
+    - 底层实现
+      - SSH2 连接、断开、接收等命令 都是需要按照ssh2的官方推荐的书写方案去实现, 参考 src/channel.rs 的实现
+      - SSH2 发送过来的消息
+        - 1. 打印一次完整内容
+        - 2. 将完整内容(实际内容和ANSI转义序列)交给VT100 去解析，配合各个组件实现功能
+          - 要 适配 VT100 所有的 解析 功能(方法)，参考 doc/screen.rs 的实现
+      - 正确的分层设计：
+        - 层次1：VT100解析器
+          - 职责：解析ANSI序列，提供字符属性
+          - 输出：结构化数据（字符+颜色+样式+位置）
+        - 层次2：终端模拟器 (新增)
+          - 职责：将VT100的解析结果转换为终端逻辑
+          - 功能：
+            - 根据字符属性判断行为（如：反显=填充行）
+            - 将颜色属性转换为UI颜色格式
+            - 处理光标位置、清屏等终端特有逻辑
+        - 层次3：UI组件
+          - 职责：纯粹的渲染，接收格式化好的内容
+          - 不关心：什么是ANSI、什么是反显
+      - 处理思路：
+        1. 将返回的内容 传入VT100核心解析方法 可能解析出 标题、图标、内容、光标位置等，并且可能包含样式
+        2. 将解析出来的 所有字段 调用 终端模拟器 对应的方法，终端模拟器会在内部渲染UI组件
+      - 相关文档： <https://www2.ccs.neu.edu/research/gpc/VonaUtils/vona/terminal/vtansi.htm>
 
 ~~~doc
 Last login: Mon Aug 18 04:29:55 2025
@@ -142,6 +147,19 @@ Last login: Mon Aug 18 04:29:55 2025
 
 iterm2 的 展示结果为：
 Last login: Mon Aug 18 16:04:06 from 192.168.3.227
+(base) ➜  ~
+
+(base) ➜  ~ pwd
+/Users/liguoxin
+(base) ➜  ~ pwd
+/Users/liguoxin
+(base) ➜  ~ ls
+Applications             Movies                   app
+Desktop                  Music                    default.cer
+Documents                Pictures                 dotTraceSnapshots
+Downloads                Public                   install.sh
+IdeaSnapshots            Sync                     java_error_in_idea.hprof
+Library                  WeChatProjects           ui5my-rkgns
 (base) ➜  ~
 ~~~
 

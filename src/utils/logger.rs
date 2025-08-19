@@ -249,6 +249,22 @@ pub fn log_ssh_disconnection(connection: &str, reason: &str) {
     }
 }
 
+/// ✅ 清除日志文件内容 - 用于应用启动时清理
+pub fn clear_log_file() {
+    if let Ok(logger) = get_logger().lock() {
+        if let Some(ref log_file_path) = logger.log_file_path {
+            match std::fs::File::create(log_file_path) {
+                Ok(_) => {
+                    println!("🗑️ 日志文件已清空: {}", log_file_path.display());
+                }
+                Err(e) => {
+                    eprintln!("❌ 清空日志文件失败: {}", e);
+                }
+            }
+        }
+    }
+}
+
 pub fn log_ssh_authentication_method(username: &str, auth_type: &str) {
     if let Ok(logger) = get_logger().lock() {
         logger.debug(

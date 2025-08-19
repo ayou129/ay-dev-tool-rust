@@ -77,6 +77,154 @@ impl TerminalEmulator {
         }
     }
 
+    // ======================== VT100动作完整适配 ========================
+    
+    /// ✅ 处理清屏动作 - 解析SSH返回的清屏序列
+    fn handle_clear_screen_action(&mut self, raw_data: &str) {
+        if raw_data.contains("\x1b[2J") {
+            crate::app_log!(debug, "VT100", "清屏动作: 清除整个屏幕");
+            // VT100库会处理实际清屏，我们记录这个动作
+        } else if raw_data.contains("\x1b[1J") {
+            crate::app_log!(debug, "VT100", "清屏动作: 清除屏幕开始到光标");
+        } else if raw_data.contains("\x1b[J") || raw_data.contains("\x1b[0J") {
+            crate::app_log!(debug, "VT100", "清屏动作: 清除光标到屏幕末尾");
+        }
+    }
+    
+    /// ✅ 处理清行动作 - 解析SSH返回的清行序列
+    fn handle_clear_line_action(&mut self, raw_data: &str) {
+        if raw_data.contains("\x1b[2K") {
+            crate::app_log!(debug, "VT100", "清行动作: 清除整行");
+        } else if raw_data.contains("\x1b[1K") {
+            crate::app_log!(debug, "VT100", "清行动作: 清除行开始到光标");
+        } else if raw_data.contains("\x1b[K") || raw_data.contains("\x1b[0K") {
+            crate::app_log!(debug, "VT100", "清行动作: 清除光标到行末");
+        }
+    }
+    
+    /// ✅ 处理光标定位动作 - 解析SSH返回的光标定位序列
+    fn handle_cursor_position_action(&mut self, raw_data: &str) {
+        // 解析光标位置序列，如 \x1b[1;1H 或 \x1b[H
+        if let Some(pos) = self.parse_cursor_position(raw_data) {
+            crate::app_log!(debug, "VT100", "光标定位: 移动到 ({}, {})", pos.0, pos.1);
+        }
+    }
+    
+    /// ✅ 处理光标移动动作 - 解析SSH返回的光标移动序列
+    fn handle_cursor_move_action(&mut self, raw_data: &str) {
+        if raw_data.contains("\x1b[A") {
+            crate::app_log!(debug, "VT100", "光标移动: 向上");
+        } else if raw_data.contains("\x1b[B") {
+            crate::app_log!(debug, "VT100", "光标移动: 向下");
+        } else if raw_data.contains("\x1b[C") {
+            crate::app_log!(debug, "VT100", "光标移动: 向右");
+        } else if raw_data.contains("\x1b[D") {
+            crate::app_log!(debug, "VT100", "光标移动: 向左");
+        }
+    }
+    
+    /// ✅ 处理属性重置动作 - 解析SSH返回的属性重置序列
+    fn handle_reset_attributes_action(&mut self) {
+        crate::app_log!(debug, "VT100", "属性重置: 清除所有文本格式和颜色");
+    }
+    
+    /// ✅ 处理模式设置动作 - 解析SSH返回的模式设置序列
+    fn handle_mode_set_action(&mut self, raw_data: &str) {
+        // 解析各种模式设置
+        if raw_data.contains("\x1b[?1h") {
+            crate::app_log!(debug, "VT100", "模式设置: 启用应用光标键模式");
+        } else if raw_data.contains("\x1b[?1l") {
+            crate::app_log!(debug, "VT100", "模式设置: 禁用应用光标键模式");
+        } else if raw_data.contains("\x1b[?25h") {
+            crate::app_log!(debug, "VT100", "模式设置: 显示光标");
+        } else if raw_data.contains("\x1b[?25l") {
+            crate::app_log!(debug, "VT100", "模式设置: 隐藏光标");
+        } else if raw_data.contains("\x1b[?47h") {
+            crate::app_log!(debug, "VT100", "模式设置: 启用备用屏幕缓冲区");
+        } else if raw_data.contains("\x1b[?47l") {
+            crate::app_log!(debug, "VT100", "模式设置: 禁用备用屏幕缓冲区");
+        } else if raw_data.contains("\x1b[?1049h") {
+            crate::app_log!(debug, "VT100", "模式设置: 启用备用屏幕缓冲区(带保存)");
+        } else if raw_data.contains("\x1b[?1049l") {
+            crate::app_log!(debug, "VT100", "模式设置: 禁用备用屏幕缓冲区(带保存)");
+        } else if raw_data.contains("\x1b[?2004h") {
+            crate::app_log!(debug, "VT100", "模式设置: 启用括号粘贴模式");
+        } else if raw_data.contains("\x1b[?2004l") {
+            crate::app_log!(debug, "VT100", "模式设置: 禁用括号粘贴模式");
+        }
+    }
+    
+    /// ✅ 处理标题变更动作 - 解析SSH返回的标题设置序列
+    fn handle_title_change_action(&mut self, raw_data: &str) {
+        // 解析标题设置序列，如 \x1b]0;title\x07 或 \x1b]2;title\x07
+        if let Some(title) = self.parse_title_sequence(raw_data) {
+            crate::app_log!(debug, "VT100", "标题设置: {}", title);
+        }
+    }
+    
+    /// ✅ 处理铃声动作 - 解析SSH返回的铃声序列
+    fn handle_bell_action(&mut self) {
+        crate::app_log!(debug, "VT100", "铃声: 收到BEL字符");
+    }
+    
+    /// ✅ 处理制表符动作 - 解析SSH返回的制表符
+    fn handle_tab_action(&mut self) {
+        crate::app_log!(debug, "VT100", "制表符: TAB字符");
+    }
+    
+    /// ✅ 处理换行动作 - 解析SSH返回的换行符
+    fn handle_line_feed_action(&mut self) {
+        crate::app_log!(debug, "VT100", "换行: LF字符");
+    }
+    
+    /// ✅ 处理回车动作 - 解析SSH返回的回车符
+    fn handle_carriage_return_action(&mut self) {
+        crate::app_log!(debug, "VT100", "回车: CR字符");
+    }
+
+    // ======================== VT100序列解析辅助方法 ========================
+    
+    /// ✅ 解析光标位置序列
+    fn parse_cursor_position(&self, raw_data: &str) -> Option<(u16, u16)> {
+        // 查找光标位置序列，如 \x1b[1;1H 或 \x1b[H
+        if let Some(start) = raw_data.find("\x1b[") {
+            if let Some(end) = raw_data[start..].find('H') {
+                let seq = &raw_data[start + 2..start + end];
+                if seq.is_empty() {
+                    return Some((1, 1)); // 默认位置
+                }
+                
+                let parts: Vec<&str> = seq.split(';').collect();
+                if parts.len() == 2 {
+                    if let (Ok(row), Ok(col)) = (parts[0].parse::<u16>(), parts[1].parse::<u16>()) {
+                        return Some((row, col));
+                    }
+                } else if parts.len() == 1 {
+                    if let Ok(row) = parts[0].parse::<u16>() {
+                        return Some((row, 1));
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    /// ✅ 解析标题设置序列
+    fn parse_title_sequence(&self, raw_data: &str) -> Option<String> {
+        // 查找标题序列，如 \x1b]0;title\x07 或 \x1b]2;title\x07
+        for prefix in &["\x1b]0;", "\x1b]1;", "\x1b]2;"] {
+            if let Some(start) = raw_data.find(prefix) {
+                let title_start = start + prefix.len();
+                if let Some(end) = raw_data[title_start..].find('\x07') {
+                    let title = &raw_data[title_start..title_start + end];
+                    return Some(title.to_string());
+                }
+            }
+        }
+        None
+    }
+
+
     // ======================== VT100常用方法封装 ========================
 
     /// 获取终端尺寸 (rows, cols)
@@ -173,24 +321,77 @@ impl TerminalEmulator {
 
     /// 处理SSH原始输出，返回格式化的终端行和可能的提示符更新
     pub fn process_ssh_output(&mut self, raw_data: &str) -> TerminalProcessResult {
-        // 累积处理数据，保持屏幕上下文，确保“提示符 + 命令”在同一行
+        // ✅ 解析VT100序列并处理各种动作
+        self.parse_and_handle_vt100_actions(raw_data);
+        
+        // 累积处理数据，保持屏幕上下文，确保"提示符 + 命令"在同一行
         self.parser.process(raw_data.as_bytes());
 
         // 将VT100解析结果转换为终端逻辑
         self.extract_terminal_content()
     }
 
+    /// ✅ 解析VT100序列并处理各种动作
+    fn parse_and_handle_vt100_actions(&mut self, raw_data: &str) {
+        // 检测并处理各种VT100动作
+        if raw_data.contains("\x1b[J") || raw_data.contains("\x1b[0J") || raw_data.contains("\x1b[1J") || raw_data.contains("\x1b[2J") {
+            self.handle_clear_screen_action(raw_data);
+        }
+        
+        if raw_data.contains("\x1b[K") || raw_data.contains("\x1b[0K") || raw_data.contains("\x1b[1K") || raw_data.contains("\x1b[2K") {
+            self.handle_clear_line_action(raw_data);
+        }
+        
+        if raw_data.contains("\x1b[H") || raw_data.contains("\x1b[;H") {
+            self.handle_cursor_position_action(raw_data);
+        }
+        
+        if raw_data.contains("\x1b[A") || raw_data.contains("\x1b[B") || raw_data.contains("\x1b[C") || raw_data.contains("\x1b[D") {
+            self.handle_cursor_move_action(raw_data);
+        }
+        
+        if raw_data.contains("\x1b[0m") || raw_data.contains("\x1b[m") {
+            self.handle_reset_attributes_action();
+        }
+        
+        if raw_data.contains("\x1b[?") {
+            self.handle_mode_set_action(raw_data);
+        }
+        
+        if raw_data.contains("\x1b]0;") || raw_data.contains("\x1b]1;") || raw_data.contains("\x1b]2;") {
+            self.handle_title_change_action(raw_data);
+        }
+        
+        if raw_data.contains("\x07") {
+            self.handle_bell_action();
+        }
+        
+        if raw_data.contains("\x09") {
+            self.handle_tab_action();
+        }
+        
+        if raw_data.contains("\x0A") {
+            self.handle_line_feed_action();
+        }
+        
+        if raw_data.contains("\x0D") {
+            self.handle_carriage_return_action();
+        }
+    }
+
     /// 从VT100解析器中提取格式化的终端内容和提示符
     fn extract_terminal_content(&mut self) -> TerminalProcessResult {
         let mut lines = Vec::new();
 
-        // 尝试用光标行作为提示符，否则回退到 title/icon
+        // 🔥 修复：使用光标当前行作为提示符（包含命令回显）
         let screen = self.parser.screen();
         let (cursor_row, _cursor_col) = self.cursor_position();
-        let prompt_update = if cursor_row > 1 {
-            let prompt_line = self.extract_line_from_screen(cursor_row - 1, &screen);
-            let text = prompt_line.text().trim().to_string();
+        let prompt_update = if cursor_row >= 1 {
+            // 使用光标当前行，这样可以包含提示符+命令回显
+            let current_line = self.extract_line_from_screen(cursor_row - 1, &screen);
+            let text = current_line.text().trim().to_string();
             if !text.is_empty() && !text.starts_with("Last login") {
+                crate::app_log!(debug, "VT100", "检测到提示符行: '{}'", text);
                 Some(text)
             } else {
                 None
@@ -240,8 +441,15 @@ impl TerminalEmulator {
 
         // 获取VT100屏幕引用（已在上方获取）
 
+        // 🔥 调试：打印所有屏幕行内容
+        crate::app_log!(debug, "VT100", "=== 开始提取屏幕内容 ===");
         for row in 0..screen.size().0 {
             let line = self.extract_line_from_screen(row, &screen);
+            let line_text = line.text();
+            
+            if !line_text.trim().is_empty() {
+                crate::app_log!(debug, "VT100", "第{}行: '{}'", row + 1, line_text);
+            }
 
             // 终端逻辑：跳过填充行
             if self.is_padding_line(&line) {
@@ -255,18 +463,12 @@ impl TerminalEmulator {
                 lines.push(line);
             }
         }
+        crate::app_log!(debug, "VT100", "=== 屏幕内容提取完成，共{}行 ===", lines.len());
 
-        // 仅返回新增行，避免重复输出（如 Last login）
-        let new_lines = if self.last_line_count <= lines.len() {
-            lines[self.last_line_count..].to_vec()
-        } else {
-            // 屏幕被清空或尺寸变化，全部返回
-            lines.clone()
-        };
-        self.last_line_count = lines.len();
-
+        // 🔥 修复：返回所有屏幕行，让UI决定如何显示
+        // 不再使用增量更新，因为这会导致命令回显丢失
         TerminalProcessResult {
-            lines: new_lines,
+            lines: lines,
             prompt_update,
         }
     }

@@ -226,8 +226,7 @@ impl TerminalPanel {
     // SSH输出处理 - 使用新的分层架构
     pub fn add_ssh_output(&mut self, text: String) {
         if !text.is_empty() {
-            crate::app_log!(info, "SSH", "收到SSH输出: {} 字节", text.len());
-            // ✅ 打印SSH原文数据
+            // ✅ 只打印SSH原文数据
             crate::app_log!(info, "SSH", "SSH原文内容: {:?}", text);
 
             // 检查是否包含ANSI转义序列
@@ -235,18 +234,8 @@ impl TerminalPanel {
                 // 使用TerminalEmulator处理SSH输出
                 let result = self.terminal_emulator.process_ssh_output(&text);
 
-                // 记录处理结果
-                let processed_text: String = result
-                    .lines
-                    .iter()
-                    .map(|line| line.text())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                crate::app_log!(debug, "SSH", "终端模拟器处理后: {}", processed_text.trim());
-
                 // 处理提示符更新
                 if let Some(new_prompt) = result.prompt_update {
-                    crate::app_log!(info, "SSH", "检测到新提示符: {}", new_prompt);
                     self.current_prompt = new_prompt;
                 }
 
@@ -256,7 +245,9 @@ impl TerminalPanel {
                     self.update_title_from_vt100(&vt100_title);
                 }
 
-                // 添加格式化的终端行（不包含提示符）
+                // 🔥 修复：直接替换整个output_buffer，而不是追加
+                // 这样可以确保显示完整的VT100屏幕内容
+                self.output_buffer.clear();
                 self.add_terminal_lines(result.lines);
 
                 // 标记已收到SSH初始输出
@@ -539,39 +530,21 @@ impl TerminalPanel {
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             // 新架构：基于TerminalSegment属性渲染
-                            // 选择“锚点行”：从末尾向前找第一条非空行（常为 (base) ➜  ~）
+                            // 🔥 修复：渲染所有行，最后一行使用内联输入
                             let len = self.output_buffer.len();
-                            let mut anchor_idx: Option<usize> = None;
-                            for i in (0..len).rev() {
-                                if let Some(line) = self.output_buffer.get(i) {
-                                    if !line.text().trim().is_empty() {
-                                        anchor_idx = Some(i);
-                                        break;
+                            
+                            if len > 0 {
+                                // 渲染前面所有行（除了最后一行）
+                                for i in 0..len-1 {
+                                    if let Some(terminal_line) = self.output_buffer.get(i) {
+                                        self.render_terminal_line_grid_improved(ui, terminal_line);
                                     }
                                 }
-                            }
-
-                            let (before_anchor, anchor_line_opt) = if let Some(i) = anchor_idx {
-                                (
-                                    self.output_buffer
-                                        .iter()
-                                        .take(i)
-                                        .cloned()
-                                        .collect::<Vec<_>>(),
-                                    self.output_buffer.get(i).cloned(),
-                                )
-                            } else {
-                                (Vec::new(), None)
-                            };
-
-                            for terminal_line in before_anchor {
-                                // ✅ 使用新的完美字符网格渲染
-                                self.render_terminal_line_grid_improved(ui, &terminal_line);
-                            }
-
-                            if let Some(anchor_line) = anchor_line_opt {
-                                // ✅ 渲染最后一行（提示符行）并添加内联输入
-                                self.render_terminal_line_with_inline_input(ui, &anchor_line);
+                                
+                                // 克隆最后一行来避免借用冲突
+                                if let Some(last_line) = self.output_buffer.get(len-1).cloned() {
+                                    self.render_terminal_line_with_inline_input(ui, &last_line);
+                                }
                             }
 
                             // 现代化欢迎界面
@@ -608,30 +581,68 @@ impl TerminalPanel {
             return;
         }
 
-        // 首先使用现有的完整颜色渲染逻辑渲染提示符行
-        if !line.is_empty() {
-            // 复用现有的字符网格渲染，保持完整的VT100颜色和对齐
-            self.render_terminal_line_grid_improved(ui, line);
-        }
+        // ✅ 关键修复：在同一个horizontal布局中渲染提示符和输入
+        ui.horizontal(|ui| {
+            // 完全消除间距以保持字符对齐
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
+            ui.spacing_mut().indent = 0.0;
 
-        // 如果连接成功且收到初始输出，在同一行添加内联输入
-        if self.is_connected && self.has_ssh_initial_output {
-            ui.horizontal(|ui| {
-                // 完全消除间距以保持字符对齐
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.spacing_mut().button_padding = egui::vec2(0.0, 0.0);
-                ui.spacing_mut().indent = 0.0;
+            // 首先渲染提示符内容（VT100解析的带颜色内容）
+            if !line.is_empty() {
+                for segment in &line.segments {
+                    if segment.text.is_empty() {
+                        continue;
+                    }
+                    
+                    // 创建富文本
+                    let mut rich_text = egui::RichText::new(&segment.text)
+                        .font(egui::FontId::monospace(14.0));
+                    
+                    // 应用颜色
+                    if let Some(color) = segment.color {
+                        rich_text = rich_text.color(color);
+                    } else {
+                        rich_text = rich_text.color(egui::Color32::BLACK);
+                    }
+                    
+                    // 应用背景色
+                    if let Some(bg_color) = segment.background_color {
+                        rich_text = rich_text.background_color(bg_color);
+                    }
+                    
+                    // 应用文本样式
+                    if segment.bold {
+                        rich_text = rich_text.strong();
+                    }
+                    if segment.italic {
+                        rich_text = rich_text.italics();
+                    }
+                    if segment.underline {
+                        rich_text = rich_text.underline();
+                    }
+                    
+                    // 处理反显
+                    if segment.inverse {
+                        rich_text = rich_text
+                            .background_color(egui::Color32::BLACK)
+                            .color(egui::Color32::WHITE);
+                    }
+                    
+                    // 渲染segment
+                    ui.add(egui::Label::new(rich_text).selectable(true));
+                }
+            }
 
+            // 然后在同一行右侧添加输入内容和光标
+            if self.is_connected && self.has_ssh_initial_output {
                 // 显示输入内容
                 if !self.input_buffer.is_empty() {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&self.input_buffer)
-                                .font(egui::FontId::monospace(14.0))
-                                .color(egui::Color32::from_rgb(0, 102, 153)),
-                        )
-                        .selectable(true),
-                    );
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(&self.input_buffer)
+                            .font(egui::FontId::monospace(14.0))
+                            .color(egui::Color32::from_rgb(0, 102, 153))
+                    ).selectable(true));
                 }
 
                 // 更新光标闪烁时间
@@ -639,20 +650,17 @@ impl TerminalPanel {
 
                 // 显示闪烁光标
                 if (self.cursor_blink_time % 1.0) < 0.5 {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("█")
-                                .font(egui::FontId::monospace(14.0))
-                                .color(egui::Color32::from_rgb(0, 102, 153)),
-                        )
-                        .selectable(false),
-                    );
+                    ui.add(egui::Label::new(
+                        egui::RichText::new("█")
+                            .font(egui::FontId::monospace(14.0))
+                            .color(egui::Color32::from_rgb(0, 102, 153))
+                    ).selectable(false));
                 }
-            });
 
-            // 处理键盘输入
-            self.handle_keyboard_input(ui);
-        }
+                // 处理键盘输入
+                self.handle_keyboard_input(ui);
+            }
+        });
 
         ui.add_space(2.0);
     }

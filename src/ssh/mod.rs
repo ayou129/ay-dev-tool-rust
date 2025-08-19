@@ -34,16 +34,7 @@ impl SshConnection {
         // 移除连接尝试日志 - 冗余，有成功/失败日志即可
 
         let tcp = match TcpStream::connect(format!("{}:{}", config.host, config.port)) {
-            Ok(stream) => {
-                crate::app_log!(
-                    debug,
-                    "SSH",
-                    "TCP连接建立成功: {}:{}",
-                    config.host,
-                    config.port
-                );
-                stream
-            }
+            Ok(stream) => stream,
             Err(e) => {
                 let error_msg = format!("TCP连接失败: {}", e);
                 log_ssh_connection_failed(&config.host, config.port, &config.username, &error_msg);
@@ -133,58 +124,77 @@ impl SshConnection {
 
         log_ssh_command_execution(command, &connection_id);
 
-        // 🔥 新设计：每个命令使用独立的channel，像iTerm2一样
-        let mut channel = self.session.channel_session()?;
+        // 🔥 按照ssh2官方推荐：使用持久shell channel执行命令
+        if let Some(ref mut channel) = self.shell_channel {
+            crate::app_log!(debug, "SSH", "使用持久shell channel执行命令: {}", command);
 
-        // 设置环境以保持一致性
-        channel.request_pty("xterm-256color", None, None)?;
-        if let Err(_) = channel.setenv("LANG", "en_US.UTF-8") {
-            // 忽略setenv失败，某些服务器不支持
+            // 发送命令
+            let command_with_newline = format!("{}\n", command);
+            channel.write_all(command_with_newline.as_bytes())?;
+            channel.flush()?;
+
+            // 等待命令执行
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            let mut output = String::new();
+            let mut buffer = vec![0; 4096];
+
+            // 使用非阻塞读取，按照ssh2官方推荐
+            let start_time = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(5);
+
+            // 设置session为非阻塞模式
+            self.session.set_blocking(false);
+            
+            while start_time.elapsed() < timeout {
+                match channel.read(&mut buffer) {
+                    Ok(bytes_read) => {
+                        if bytes_read > 0 {
+                            let text = String::from_utf8_lossy(&buffer[..bytes_read]);
+                            output.push_str(&text);
+                        }
+                    }
+                    Err(e) => {
+                        // 检查是否是WouldBlock错误（表示没有更多数据）
+                        if e.kind() == std::io::ErrorKind::WouldBlock {
+                            // 没有更多数据，短暂等待
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            
+                            // 如果已经有输出且最近没有新数据，可能命令已完成
+                            if !output.is_empty() {
+                                let recent_wait = std::time::Duration::from_millis(300);
+                                let mut no_new_data_time = std::time::Instant::now();
+                                
+                                while no_new_data_time.elapsed() < recent_wait {
+                                    match channel.read(&mut buffer) {
+                                        Ok(bytes) if bytes > 0 => {
+                                            let text = String::from_utf8_lossy(&buffer[..bytes]);
+                                            output.push_str(&text);
+                                            no_new_data_time = std::time::Instant::now(); // 重置计时
+                                        }
+                                        _ => {
+                                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                        }
+                                    }
+                                }
+                                break; // 300ms内没有新数据，认为命令完成
+                            }
+                        } else {
+                            // 其他错误，退出
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 恢复阻塞模式
+            self.session.set_blocking(true);
+
+            log_ssh_command_success(command, &connection_id, output.len());
+            Ok(output)
+        } else {
+            Err(anyhow::anyhow!("Shell channel不存在"))
         }
-        if let Err(_) = channel.setenv("LC_ALL", "en_US.UTF-8") {
-            // 忽略setenv失败
-        }
-
-        // 直接执行命令（不是shell模式）
-        channel.exec(command)?;
-
-        crate::app_log!(debug, "SSH", "创建独立channel执行命令: {}", command);
-
-        // 使用SSH2的标准读取方式
-        let mut output = String::new();
-
-        // 使用BufReader进行高效读取
-        use std::io::BufRead;
-        let mut reader = std::io::BufReader::new(&mut channel);
-        let mut line = String::new();
-
-        crate::app_log!(debug, "SSH", "开始读取命令输出");
-
-        // 逐行读取直到EOF
-        while reader.read_line(&mut line)? > 0 {
-            output.push_str(&line);
-            crate::app_log!(debug, "SSH", "读取一行: {} 字节", line.len());
-            line.clear();
-        }
-
-        crate::app_log!(debug, "SSH", "读取完成，等待通道关闭");
-
-        // 等待命令执行完毕
-        channel.wait_close()?;
-        let exit_status = channel.exit_status().unwrap_or(-1);
-
-        crate::app_log!(debug, "SSH", "命令执行完成，退出状态: {}", exit_status);
-
-        log_ssh_command_success(command, &connection_id, output.len());
-        crate::app_log!(
-            debug,
-            "SSH",
-            "命令执行成功: '{}' -> {} 字符",
-            command,
-            output.len()
-        );
-
-        Ok(output)
     }
 
     pub fn get_info(&self) -> &ConnectionConfig {
@@ -223,11 +233,9 @@ impl SshConnection {
             Ok(bytes_read) => {
                 if bytes_read > 0 {
                     let text = String::from_utf8_lossy(&buffer[..bytes_read]);
-                    crate::app_log!(info, "SSH", "读取到初始输出 {} 字节", bytes_read);
                     output.push_str(&text);
                 } else {
                     // 没有初始输出，发送换行符获取提示符
-                    crate::app_log!(info, "SSH", "无初始输出，发送换行符获取提示符");
                     let _ = channel.write_all(b"\n");
                     let _ = channel.flush();
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -240,16 +248,14 @@ impl SshConnection {
                     }
                 }
             }
-            Err(e) => {
-                crate::app_log!(warn, "SSH", "读取初始输出失败: {}", e);
+            Err(_) => {
+                // 读取失败，静默处理
             }
         }
 
         // 优雅关闭通道，忽略关闭错误
         let _ = channel.close();
         let _ = channel.wait_close();
-
-        crate::app_log!(info, "SSH", "完成，输出长度: {} 字符", output.len());
         Ok(output)
     }
 
@@ -282,27 +288,11 @@ impl SshManager {
 
     // 获取shell会话初始输出
     pub async fn get_shell_initial_output(&self, id: &str) -> Result<String> {
-        crate::app_log!(
-            info,
-            "SSH",
-            "SshManager.get_shell_initial_output 被调用，id: {}",
-            id
-        );
-        crate::app_log!(
-            info,
-            "SSH",
-            "当前连接数: {}, 连接列表: {:?}",
-            self.connections.len(),
-            self.connections.keys().collect::<Vec<_>>()
-        );
-
         if let Some(connection) = self.connections.get(id) {
-            crate::app_log!(info, "SSH", "找到连接 {}, 开始获取shell输出", id);
             let mut conn = connection.lock().await;
             conn.get_shell_initial_output().await
         } else {
             let error_msg = format!("连接不存在: {}", id);
-            crate::app_log!(error, "SSH", "{}", error_msg);
             Err(anyhow::anyhow!(error_msg))
         }
     }

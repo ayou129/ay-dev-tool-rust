@@ -105,6 +105,10 @@ fn main() -> eframe::Result<()> {
 
     // 初始化全局应用日志系统
     let logger = utils::logger::init_logger();
+    
+    // ✅ 清除旧的日志文件内容
+    utils::logger::clear_log_file();
+    
     logger.lock().unwrap().info("App", "应用程序启动");
 
     // 记录日志文件路径
