@@ -65,9 +65,8 @@
 ### 文件结构
 
 #### 📁 应用层 (src/app/)
-- **mod.rs** - 应用模块入口，导出SimpleTerminalApp和TabBasedApp
-- **simple.rs** - 原始简单应用实现（已废弃，保留用于兼容）
-- **tab_app.rs** - 基于Tab系统的主应用，使用设计模式实现
+- **mod.rs** - 应用模块入口，导出TabAppFactory
+- **tab_app.rs** - 基于Tab系统的主应用，使用设计模式实现，包含TabBasedApp和TabAppFactory
 
 #### 📁 配置层 (src/config/)
 - **mod.rs** - 配置管理模块，处理应用配置的加载、保存和默认值
