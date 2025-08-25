@@ -93,6 +93,7 @@ impl SimpleTerminalPanel {
 
     /// 🔑 核心方法：简单的UI渲染测试版本
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        
         // 🔑 恢复到单次调用，看看是否还有重复
         self.receive_ssh_output();
         
@@ -181,6 +182,7 @@ impl SimpleTerminalPanel {
     fn render_terminal_output(&mut self, ui: &mut egui::Ui) {
         let available_height = ui.available_height();
         let mut should_execute_command = false;
+        let mut should_send_tab = false;
         
         // 🎯 关键修复：先复制所有需要的数据，避免借用冲突
         let lines: Vec<_> = self.output_buffer.iter().cloned().collect();
@@ -207,7 +209,9 @@ impl SimpleTerminalPanel {
                 for (index, line) in lines.iter().enumerate() {
                     if Some(index) == last_non_empty_index && is_connected {
                         // 最后一行非空内容：显示内容 + 输入框
-                        should_execute_command = Self::render_line_with_input_static(ui, line, &mut self.input_buffer);
+                        let (exec_cmd, send_tab) = Self::render_line_with_input_static_enhanced(ui, line, &mut self.input_buffer);
+                        should_execute_command = exec_cmd;
+                        should_send_tab = send_tab;
                     } else {
                         // 普通行：只显示内容
                         Self::render_terminal_line_static(ui, line);
@@ -216,7 +220,10 @@ impl SimpleTerminalPanel {
                 
                 // 如果没有任何非空内容，显示单独输入行
                 if last_non_empty_index.is_none() && is_connected {
-                    should_execute_command = Self::render_integrated_input_line_static(ui, &current_prompt, &mut self.input_buffer);
+                    crate::app_log!(info, "UI", "📝 显示单独输入行");
+                    let (exec_cmd, send_tab) = Self::render_integrated_input_line_static_enhanced(ui, &current_prompt, &mut self.input_buffer);
+                    should_execute_command = exec_cmd;
+                    should_send_tab = send_tab;
                 }
             });
 
@@ -226,7 +233,13 @@ impl SimpleTerminalPanel {
         
         // 处理命令执行
         if should_execute_command {
+            crate::app_log!(info, "UI", "🚀 检测到回车键，准备执行命令");
             self.execute_command();
+        }
+        
+        // 🎯 关键新增：处理Tab键自动补全
+        if should_send_tab {
+            self.send_tab_completion();
         }
     }
 
@@ -258,9 +271,10 @@ impl SimpleTerminalPanel {
         });
     }
     
-    /// 🎯 渲染带输入框的行（静态版本）
-    fn render_line_with_input_static(ui: &mut egui::Ui, line: &TerminalLine, input_buffer: &mut String) -> bool {
+    /// 🎯 渲染带输入框的行（增强版 - 支持Tab补全）
+    fn render_line_with_input_static_enhanced(ui: &mut egui::Ui, line: &TerminalLine, input_buffer: &mut String) -> (bool, bool) {
         let mut should_execute = false;
+        let mut should_send_tab = false;
         
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -295,21 +309,39 @@ impl SimpleTerminalPanel {
                     .frame(false)
             );
             
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                should_execute = true;
+            // 🎯 关键修复：使用更可靠的按键检测方式
+            // 强制获取焦点
+            response.request_focus();
+            
+            if response.has_focus() {
+                // 方法1：检测回车键按下（优先）
+                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let tab_pressed = ui.input(|i| i.key_pressed(egui::Key::Tab));
+                
+                if enter_pressed {
+                    should_execute = true;
+                    crate::app_log!(info, "UI", "🚀 检测到回车键按下！");
+                } else if tab_pressed {
+                    should_send_tab = true;
+                }
             }
             
-            if !response.has_focus() {
-                response.request_focus();
+            // 方法2：检测文本变化中的回车（备用）
+            if response.changed() && input_buffer.ends_with('\n') {
+                input_buffer.pop(); // 移除换行符
+                should_execute = true;
             }
         });
         
-        should_execute
+        (should_execute, should_send_tab)
     }
     
-    /// 🎯 渲染内嵌式输入行（静态版本）
-    fn render_integrated_input_line_static(ui: &mut egui::Ui, current_prompt: &str, input_buffer: &mut String) -> bool {
+    /// 🎯 渲染内嵌式输入行（增强版 - 支持Tab补全）
+    fn render_integrated_input_line_static_enhanced(ui: &mut egui::Ui, current_prompt: &str, input_buffer: &mut String) -> (bool, bool) {
+        crate::app_log!(info, "UI", "📝 render_integrated_input_line_static_enhanced() 被调用");
+        
         let mut should_execute = false;
+        let mut should_send_tab = false;
         
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -332,26 +364,50 @@ impl SimpleTerminalPanel {
                     .frame(false)
             );
             
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                should_execute = true;
+            // 🎯 关键修复：使用更可靠的按键检测方式
+            if response.has_focus() {
+                // 方法1：检测回车键按下（优先）
+                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let tab_pressed = ui.input(|i| i.key_pressed(egui::Key::Tab));
+                
+                if enter_pressed {
+                    should_execute = true;
+                    crate::app_log!(debug, "UI", "🔑 检测到回车键按下（集成输入行）");
+                } else if tab_pressed {
+                    should_send_tab = true;
+                    crate::app_log!(debug, "UI", "🔑 检测到Tab键按下（集成输入行）");
+                }
             }
             
+            // 方法2：检测文本变化中的回车（备用）
+            if response.changed() && input_buffer.ends_with('\n') {
+                input_buffer.pop(); // 移除换行符
+                should_execute = true;
+                crate::app_log!(debug, "UI", "🔑 通过文本变化检测到回车（集成输入行）");
+            }
+            
+            // 自动获取焦点
             if !response.has_focus() {
                 response.request_focus();
             }
         });
         
-        should_execute
+        (should_execute, should_send_tab)
     }
 
     /// 🔑 真正简单的命令执行（同步，无回调）
     fn execute_command(&mut self) {
+        crate::app_log!(debug, "UI", "🎯 execute_command 被调用，输入缓冲区内容: '{}'", self.input_buffer);
+        
         if !self.input_buffer.trim().is_empty() {
             let command = self.input_buffer.clone();
             self.input_buffer.clear();
+            
+            crate::app_log!(info, "UI", "📝 准备执行命令: '{}'", command.trim());
 
             if command.trim() == "clear" {
                 self.output_buffer.clear();
+                crate::app_log!(info, "UI", "🧹 执行本地clear命令");
                 return;
             }
 
@@ -360,14 +416,17 @@ impl SimpleTerminalPanel {
             // 现在直接发送命令，让SSH服务器处理回显
 
             if self.is_connected {
+                crate::app_log!(debug, "UI", "🔗 连接状态: 已连接");
                 if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
+                    crate::app_log!(debug, "UI", "📡 SSH管理器和Tab ID都存在，准备发送命令");
                     // 🔑 关键：直接同步发送命令，无异步回调
                     match ssh_manager.execute_command(tab_id, command.trim()) {
                         Ok(_) => {
-                            crate::app_log!(info, "UI", "命令发送成功: {}", command.trim());
+                            crate::app_log!(info, "UI", "✅ 命令发送成功: {}", command.trim());
                             // 输出会在下一帧的read_ssh_output_sync中读取
                         }
                         Err(e) => {
+                            crate::app_log!(error, "UI", "❌ 命令发送失败: {}", e);
                             self.insert_text(format!("命令执行失败: {}", e));
                         }
                     }
@@ -375,10 +434,34 @@ impl SimpleTerminalPanel {
                     self.insert_text("错误: SSH连接不存在".to_string());
                 }
             } else {
+                crate::app_log!(error, "UI", "❌ 连接状态: 未连接");
                 self.insert_text("错误: 未连接到远程主机".to_string());
             }
 
             self.scroll_to_bottom = true;
+        } else {
+            crate::app_log!(debug, "UI", "🚫 输入缓冲区为空，不执行任何操作");
+        }
+    }
+    
+    /// 🎯 新增：发送Tab键进行自动补全
+    fn send_tab_completion(&mut self) {
+        if !self.input_buffer.is_empty() && self.is_connected {
+            if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
+                // 🔑 关键：直接使用execute_command发送包含Tab字符的内容
+                // 这样可以利用现有的架构，无需添加新接口
+                let completion_input = format!("{}	", self.input_buffer);
+                match ssh_manager.execute_command(tab_id, &completion_input) {
+                    Ok(_) => {
+                        crate::app_log!(debug, "UI", "🎯 Tab补全发送成功: '{}'", self.input_buffer);
+                        // 注意：不清空输入缓冲区，让用户继续编辑
+                        // 远程终端会返回补全结果，用户可以看到后再决定
+                    }
+                    Err(e) => {
+                        crate::app_log!(error, "UI", "🎯 Tab补全发送失败: {}", e);
+                    }
+                }
+            }
         }
     }
 
