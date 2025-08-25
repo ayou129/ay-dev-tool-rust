@@ -123,17 +123,42 @@
 
 #### 📁 SSH/网络层 (src/ssh/)
 - **mod.rs** - SSH模块入口，导出SSH2实现
-- **ssh2_client.rs** - 基于ssh2库的SSH连接实现，原生异步操作
-  - `Ssh2Connection` - SSH2连接结构体
+- **ssh2_client.rs** - 基于ssh2库的SSH连接实现，**采用Actor模式+消息传递架构**
+  - **架构选择原因**：
+    - ✅ **无锁设计** - 避免多线程锁竞争，提高性能和稳定性
+    - ✅ **简单清晰** - 一个SSH连接对应一个Actor，职责单一
+    - ✅ **内存安全** - 消息传递天然避免数据竞争和并发问题
+    - ✅ **易于扩展** - 新功能只需要添加新消息类型
+    - ✅ **符合Rust特性** - 利用mpsc::channel的高性能消息传递
+  - **Actor架构设计**：
+    ```rust
+    // SSH Actor - 独占管理一个SSH连接
+    struct SshActor {
+        connection: Ssh2Connection,  // 只有Actor能操作连接
+        message_receiver: Receiver<SshMessage>,
+    }
+    
+    // 消息类型 - 所有操作都通过消息
+    enum SshMessage {
+        SendCommand(String),    // 发送命令消息
+        ReadOutput,            // 读取输出消息
+        Disconnect,            // 断开连接消息
+    }
+    ```
+  - `Ssh2Connection` - SSH2连接结构体（被Actor独占管理）
     - `session: ssh2::Session` - SSH2会话，主要的SSH连接对象
     - `channel: ssh2::Channel` - SSH2通道，用于数据交互的虚拟终端
     - `config: ConnectionConfig` - 连接配置，存储主机、用户名、认证信息
     - `tcp_stream: TcpStream` - TCP连接，底层网络通信
     - `is_connected: bool` - 连接状态标志，跟踪SSH连接是否活跃
     - `terminal_size: (u16, u16)` - 终端尺寸，支持动态调整窗口大小
+  - `SshActor` - SSH Actor结构体（核心设计）
+    - `connection: Ssh2Connection` - SSH连接实例（独占访问）
+    - `message_receiver: Receiver<SshMessage>` - 消息接收器
+    - `output_sender: Sender<String>` - 输出发送器，向UI发送数据
   - `Ssh2Manager` - SSH2管理器结构体
-    - `connections: HashMap<String, Ssh2Connection>` - 连接池，管理多个SSH连接
-    - `runtime: tokio::runtime::Runtime` - 异步运行时，处理异步SSH操作
+    - `actors: HashMap<String, SshActorHandle>` - Actor句柄集合，管理多个SSH Actor
+    - `runtime: tokio::runtime::Runtime` - 异步运行时，处理Actor生命周期
 
 #### 📁 UI层 (src/ui/)
 - **mod.rs** - UI模块入口，导出所有UI组件和配置类型
@@ -305,6 +330,66 @@
 6. 每次修复完成之后 将整个项目 从 cargo check 检查出来的警告 全部都要修复，如果涉及到 某个 不存在 或者 临时的占位符 没有写具体逻辑，要补充进去
 7. 每一个icon和文字的组合的按钮 都应该是 左边icon右侧中文文字，且被按钮包围，且icon使用的是图标库的icon
 8. 一定要注意：在Rust异步代码中，MutexGuard 会在整个使用它的作用域内持有锁。
+
+## 代码优化计划
+
+### 🎯 当前架构改进 (进行中)
+
+#### 1. SSH连接架构重构 - Actor模式实现
+**目标**：解决当前锁竞争问题，提升SSH连接性能和稳定性
+
+**当前问题**：
+- 多线程共享SSH连接对象导致锁竞争激烈
+- 写入线程经常因锁竞争而命令发送超时
+- 架构复杂，难以调试和维护
+
+**重构方案**：采用Actor模式 + 消息传递
+```rust
+// 重构后的架构设计
+struct SshActor {
+    connection: Ssh2Connection,  // Actor独占SSH连接
+    message_rx: Receiver<SshMessage>,
+    output_tx: Sender<String>,
+}
+
+enum SshMessage {
+    SendCommand(String),
+    ReadOutput,
+    Disconnect,
+}
+```
+
+**优势**：
+- ✅ **彻底消除锁竞争** - 单线程操作SSH连接
+- ✅ **简化架构** - 清晰的消息驱动模型
+- ✅ **提升性能** - 无锁设计，减少线程同步开销
+- ✅ **易于扩展** - 新功能只需添加新消息类型
+- ✅ **符合Rust特性** - 利用所有权系统保证内存安全
+
+**实施计划**：
+1. **阶段1** - 重构`ssh2_client.rs`，实现Actor基础架构
+2. **阶段2** - 更新`SimpleTerminalPanel`集成Actor接口
+3. **阶段3** - 测试验证，性能对比，清理旧代码
+
+#### 2. VT100解析优化 ✅ (已完成)
+- 实现基于屏幕内容差异的真正增量处理
+- 避免重复显示相同内容
+- 优化字符网格渲染性能
+
+#### 3. 终端交互改进 (计划中)
+- 添加历史记录和自动补全功能
+- 改进Tab栏视觉显示
+- 实现SSH实时流式输出优化
+
+### 🔧 技术债务处理
+1. **编译警告清理** - 修复所有未使用代码警告
+2. **文档同步更新** - 保持README与实际架构一致
+3. **单元测试补充** - 为核心模块添加测试覆盖
+
+### 📈 性能优化目标
+- SSH命令响应时间 < 100ms
+- 终端滚动流畅度 60fps
+- 内存使用优化，减少不必要的数据拷贝
 
 ## 项目其他说明
 

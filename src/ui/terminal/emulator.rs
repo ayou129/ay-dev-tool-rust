@@ -1,14 +1,12 @@
 use vt100;
 
-use super::types::TerminalProcessResult;
+use super::types::{TerminalProcessResult, TerminalLine, TerminalSegment};
 use super::vt100_handler::Vt100Handler;
-use super::content_extractor::ContentExtractor;
 
-/// 核心终端模拟器 - 简化版本
+/// 核心终端模拟器 - 简化版本(直接使用VT100状态)
 pub struct TerminalEmulator {
     parser: vt100::Parser,
     vt100_handler: Vt100Handler,
-    content_extractor: ContentExtractor,
     width: u16,
     height: u16,
 }
@@ -18,13 +16,12 @@ impl TerminalEmulator {
         Self {
             parser: vt100::Parser::new(height, width, 1000),
             vt100_handler: Vt100Handler::new(),
-            content_extractor: ContentExtractor::new(),
             width,
             height,
         }
     }
 
-    /// 处理PTY输出数据 - 主要入口方法
+    /// 处理PTY输出数据 - 主要入口方法(直接使用VT100屏幕状态)
     pub fn process_pty_output(&mut self, data: &str) -> TerminalProcessResult {
         // 处理VT100序列
         self.handle_vt100_sequences(data);
@@ -32,8 +29,8 @@ impl TerminalEmulator {
         // 将数据传给解析器
         self.parser.process(data.as_bytes());
         
-        // 提取内容 - 使用可变引用支持增量式处理
-        self.content_extractor.extract_content(&self.parser)
+        // 🔑 关键：直接从 VT100 解析器获取屏幕内容
+        self.extract_screen_content()
     }
 
     /// 处理VT100序列 - 简化版本
@@ -83,5 +80,130 @@ impl TerminalEmulator {
     /// 重置终端状态
     pub fn reset(&mut self) {
         self.parser = vt100::Parser::new(self.height, self.width, 1000);
+    }
+
+    /// 🔑 从 VT100 屏幕直接获取完整状态(无增量处理，就像iTerm2一样)
+    fn extract_screen_content(&self) -> TerminalProcessResult {
+        let screen = self.parser.screen();
+        let mut lines = Vec::new();
+        
+        // 🎯 关键修复：获取屏幕完整状态，让UI自己处理差异
+        for row in 0..screen.size().0 {
+            let line = self.extract_line_from_screen(row, &screen);
+            // 🔑 重要：所有行都返回，包括空行，让UI决定如何显示
+            lines.push(line);
+        }
+        
+        // 检测提示符(从光标位置)
+        let prompt_update = self.detect_prompt(&screen);
+        
+        crate::app_log!(debug, "VT100", "📺 屏幕状态更新: {} 行", lines.len());
+        
+        TerminalProcessResult {
+            lines,
+            prompt_update,
+        }
+    }
+    
+    /// 从屏幕提取单行内容
+    fn extract_line_from_screen(&self, row: u16, screen: &vt100::Screen) -> TerminalLine {
+        let mut line = TerminalLine::new();
+        let mut current_segment = TerminalSegment::default();
+        let screen_width = screen.size().1;
+        
+        for col in 0..screen_width {
+            if let Some(cell) = screen.cell(row, col) {
+                let ch = cell.contents();
+                
+                // 检查字符属性是否变化
+                let new_attrs = TerminalSegment {
+                    text: String::new(),
+                    color: self.convert_vt100_color(cell.fgcolor()),
+                    background_color: self.convert_vt100_color(cell.bgcolor()),
+                    bold: cell.bold(),
+                    italic: cell.italic(),
+                    underline: cell.underline(),
+                    inverse: cell.inverse(),
+                };
+                
+                // 如果属性变化，保存当前片段并开始新片段
+                if self.attributes_changed(&current_segment, &new_attrs) {
+                    if !current_segment.text.is_empty() {
+                        line.segments.push(current_segment);
+                    }
+                    current_segment = new_attrs;
+                }
+                
+                // 添加字符到当前片段
+                if !ch.is_empty() {
+                    current_segment.text.push_str(&ch);
+                }
+            }
+        }
+        
+        // 添加最后一个片段
+        if !current_segment.text.is_empty() {
+            line.segments.push(current_segment);
+        }
+        
+        line
+    }
+    
+    /// 检测命令提示符
+    fn detect_prompt(&self, screen: &vt100::Screen) -> Option<String> {
+        let (cursor_row, _) = screen.cursor_position();
+        
+        if cursor_row >= 1 {
+            let current_line = self.extract_line_from_screen(cursor_row - 1, screen);
+            let text = current_line.text().trim().to_string();
+            
+            if !text.is_empty() && !text.starts_with("Last login") {
+                Some(text)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    
+    /// 将VT100颜色转换为egui颜色
+    fn convert_vt100_color(&self, color: vt100::Color) -> Option<egui::Color32> {
+        match color {
+            vt100::Color::Default => None,
+            vt100::Color::Idx(idx) => {
+                // 标准的16色调色板
+                match idx {
+                    0 => Some(egui::Color32::BLACK),
+                    1 => Some(egui::Color32::from_rgb(128, 0, 0)),   // 红色
+                    2 => Some(egui::Color32::from_rgb(0, 128, 0)),   // 绿色
+                    3 => Some(egui::Color32::from_rgb(128, 128, 0)), // 黄色
+                    4 => Some(egui::Color32::from_rgb(0, 0, 128)),   // 蓝色
+                    5 => Some(egui::Color32::from_rgb(128, 0, 128)), // 紫色
+                    6 => Some(egui::Color32::from_rgb(0, 128, 128)), // 青色
+                    7 => Some(egui::Color32::LIGHT_GRAY),
+                    8 => Some(egui::Color32::DARK_GRAY),
+                    9 => Some(egui::Color32::RED),
+                    10 => Some(egui::Color32::GREEN),
+                    11 => Some(egui::Color32::YELLOW),
+                    12 => Some(egui::Color32::BLUE),
+                    13 => Some(egui::Color32::from_rgb(255, 0, 255)), // 品红
+                    14 => Some(egui::Color32::from_rgb(0, 255, 255)), // 青色
+                    15 => Some(egui::Color32::WHITE),
+                    _ => None,
+                }
+            }
+            vt100::Color::Rgb(r, g, b) => Some(egui::Color32::from_rgb(r, g, b)),
+        }
+    }
+    
+    /// 检查属性是否变化
+    fn attributes_changed(&self, current: &TerminalSegment, new: &TerminalSegment) -> bool {
+        current.color != new.color
+            || current.background_color != new.background_color
+            || current.bold != new.bold
+            || current.italic != new.italic
+            || current.underline != new.underline
+            || current.inverse != new.inverse
     }
 }

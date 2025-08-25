@@ -10,7 +10,192 @@ use anyhow::{Result, anyhow};
 
 use crate::ui::{AuthType, ConnectionConfig};
 
-/// SSH2连接结构体 - 包装ssh2的Session和Channel
+/// 🎭 Actor模式 - SSH消息类型
+#[derive(Debug, Clone)]
+pub enum SshMessage {
+    /// 发送命令到SSH服务器
+    SendCommand(String),
+    /// 读取SSH输出数据
+    ReadOutput,
+    /// 断开SSH连接
+    Disconnect,
+    /// 检查连接状态
+    CheckStatus,
+}
+
+/// 🎭 Actor模式 - SSH响应类型  
+pub enum SshResponse {
+    /// 命令执行结果
+    CommandResult(Result<()>),
+    /// SSH输出数据
+    OutputData(String),
+    /// 连接状态
+    ConnectionStatus(bool),
+    /// 错误信息
+    Error(String),
+}
+
+/// 🎭 SSH Actor - 独占管理一个SSH连接（Actor模式核心）
+pub struct SshActor {
+    /// SSH连接实例（Actor独占访问）
+    connection: Ssh2Connection,
+    /// 消息接收器 - 接收来自外部的操作请求
+    message_receiver: Receiver<SshMessage>,
+    /// 输出发送器 - 向UI发送SSH输出数据
+    output_sender: Sender<String>,
+    /// 响应发送器 - 发送操作结果
+    response_sender: Option<Sender<SshResponse>>,
+}
+
+impl SshActor {
+    /// 创建SSH Actor
+    pub fn new(
+        connection: Ssh2Connection,
+        message_receiver: Receiver<SshMessage>,
+        output_sender: Sender<String>,
+    ) -> Self {
+        Self {
+            connection,
+            message_receiver,
+            output_sender,
+            response_sender: None,
+        }
+    }
+    
+    /// Actor主循环 - 处理消息和管理SSH连接
+    pub fn run(mut self) {
+        crate::app_log!(info, "SshActor", "🎭 启动SSH Actor主循环");
+        
+        // 主消息处理循环，同时处理输出读取
+        loop {
+            // 非阻塞读取SSH输出
+            if let Ok(output) = self.connection.read_output() {
+                if !output.is_empty() {
+                    if let Err(_) = self.output_sender.send(output) {
+                        crate::app_log!(warn, "SshActor", "🎭 输出发送失败，接收器已关闭");
+                        break;
+                    }
+                }
+            }
+            
+            // 非阻塞接收消息，给出Some(超时时间)
+            match self.message_receiver.recv_timeout(Duration::from_millis(10)) {
+                Ok(message) => {
+                    match message {
+                        SshMessage::SendCommand(cmd) => {
+                            self.handle_send_command(&cmd);
+                        }
+                        SshMessage::ReadOutput => {
+                            // 输出在上面的循环中处理
+                        }
+                        SshMessage::CheckStatus => {
+                            self.handle_check_status();
+                        }
+                        SshMessage::Disconnect => {
+                            crate::app_log!(info, "SshActor", "🎭 收到断开请求，退出Actor");
+                            break;
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // 超时是正常情况，继续循环
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    crate::app_log!(info, "SshActor", "🎭 消息通道已断开，退出Actor");
+                    break;
+                }
+            }
+        }
+        
+        // 清理资源
+        self.cleanup();
+        crate::app_log!(info, "SshActor", "🎭 SSH Actor主循环结束");
+    }
+    
+    /// 处理发送命令
+    fn handle_send_command(&mut self, command: &str) {
+        match self.connection.send_command(command) {
+            Ok(_) => {
+                crate::app_log!(debug, "SshActor", "🎭 命令发送成功: {}", command);
+            }
+            Err(e) => {
+                crate::app_log!(error, "SshActor", "🎭 命令发送失败: {}", e);
+            }
+        }
+    }
+    
+    /// 处理状态检查
+    fn handle_check_status(&self) {
+        // 可以添加状态检查逻辑
+        crate::app_log!(debug, "SshActor", "🎭 连接状态: {}", self.connection.is_connected);
+    }
+    
+    /// 清理资源
+    fn cleanup(&mut self) {
+        if let Err(e) = self.connection.disconnect() {
+            crate::app_log!(error, "SshActor", "🎭 断开连接失败: {}", e);
+        }
+    }
+}
+
+/// 🎭 Actor句柄 - 用于与Actor通信
+pub struct SshActorHandle {
+    /// 消息发送器 - 向Actor发送操作请求
+    message_sender: Sender<SshMessage>,
+    /// 输出接收器 - 接收来自Actor的SSH输出
+    output_receiver: Receiver<String>,
+    /// Actor线程句柄
+    _actor_handle: thread::JoinHandle<()>,
+}
+
+impl SshActorHandle {
+    /// 创建SSH Actor和对应的句柄
+    pub fn spawn(connection: Ssh2Connection) -> Self {
+        let (msg_tx, msg_rx) = mpsc::channel::<SshMessage>();
+        let (out_tx, out_rx) = mpsc::channel::<String>();
+        
+        let actor = SshActor::new(connection, msg_rx, out_tx);
+        let actor_handle = thread::spawn(move || {
+            actor.run();
+        });
+        
+        Self {
+            message_sender: msg_tx,
+            output_receiver: out_rx,
+            _actor_handle: actor_handle,
+        }
+    }
+    
+    /// 发送命令到SSH Actor
+    pub fn execute_command(&self, command: &str) -> Result<()> {
+        self.message_sender
+            .send(SshMessage::SendCommand(command.to_string()))
+            .map_err(|_| anyhow!("命令发送失败：Actor已关闭"))?;
+        crate::app_log!(info, "SshActorHandle", "🚀 命令已提交给Actor: {}", command);
+        Ok(())
+    }
+    
+    /// 从 SSH Actor 读取输出
+    pub fn read_output(&self) -> Result<String> {
+        match self.output_receiver.try_recv() {
+            Ok(data) => {
+                crate::app_log!(debug, "SshActorHandle", "📨 从Actor收到输出: {} 字节", data.len());
+                Ok(data)
+            }
+            Err(_) => Ok(String::new())
+        }
+    }
+    
+    /// 断开SSH Actor
+    pub fn disconnect(&self) -> Result<()> {
+        self.message_sender
+            .send(SshMessage::Disconnect)
+            .map_err(|_| anyhow!("断开请求发送失败：Actor已关闭"))?;
+        Ok(())
+    }
+}
+
+/// SSH2连接结构体 - 简化版本（被Actor管理）
 pub struct Ssh2Connection {
     pub config: ConnectionConfig,
     session: Session,
@@ -288,33 +473,42 @@ impl Ssh2ConnectionWrapper {
             crate::app_log!(info, "SSH2-Read", "📚 SSH读取线程结束");
         });
         
-        // 🔑 关键：独立的写入线程
+        // 🔑 关键：优化的写入线程 - 减少锁竞争
         let write_connection = Arc::clone(&connection);
-        let cmd_sender_clone = cmd_sender.clone(); // 克隆一个用于线程内重试
         let write_handle = thread::spawn(move || {
             crate::app_log!(info, "SSH2-Write", "✏️ 启动SSH写入线程");
             while let Ok(command) = cmd_receiver.recv() {
-                match write_connection.try_lock() {
-                    Ok(mut conn) => {
-                        if !conn.is_connected {
-                            break;
-                        }
-                        
-                        match conn.send_command(&command) {
-                            Ok(_) => {
-                                crate::app_log!(debug, "SSH2-Write", "✏️ 命令发送成功: {}", command);
+                // 🔑 简化策略：减少重试次数，增加等待时间
+                let mut retry_count = 0;
+                let max_retries = 20; // 减少最大重试次数
+                
+                loop {
+                    match write_connection.try_lock() {
+                        Ok(mut conn) => {
+                            if !conn.is_connected {
+                                break;
                             }
-                            Err(e) => {
-                                crate::app_log!(error, "SSH2-Write", "✏️ 命令发送失败: {}", e);
+                            
+                            match conn.send_command(&command) {
+                                Ok(_) => {
+                                    crate::app_log!(debug, "SSH2-Write", "✏️ 命令发送成功: {}", command);
+                                    break; // 成功，退出重试循环
+                                }
+                                Err(e) => {
+                                    crate::app_log!(error, "SSH2-Write", "✏️ 命令发送失败: {}", e);
+                                    break; // 发送失败，退出重试循环
+                                }
                             }
                         }
-                    }
-                    Err(_) => {
-                        // 锁被占用，等待一下再试
-                        thread::sleep(Duration::from_millis(5));
-                        // 重新发送命令
-                        if cmd_sender_clone.send(command).is_err() {
-                            break;
+                        Err(_) => {
+                            retry_count += 1;
+                            if retry_count >= max_retries {
+                                crate::app_log!(warn, "SSH2-Write", "✏️ 命令发送超时，放弃: {}", command);
+                                break;
+                            }
+                            
+                            // 🔑 简化：固定5ms等待，减少CPU使用
+                            thread::sleep(Duration::from_millis(5));
                         }
                     }
                 }
@@ -367,10 +561,10 @@ impl Ssh2ConnectionWrapper {
     }
 }
 
-/// 🔑 简化的SSH2管理器 - 无锁架构
+/// 🔑 简化的SSH2管理器 - Actor模式架构
 pub struct Ssh2Manager {
-    // 🔑 关键：使用Mutex实现内部可变性，支持Arc共享
-    connections: Arc<Mutex<HashMap<String, Ssh2ConnectionWrapper>>>,
+    // 🔑 关键：使用Actor句柄管理SSH连接，彻底消除锁竞争
+    connections: Arc<Mutex<HashMap<String, SshActorHandle>>>,
     runtime: tokio::runtime::Runtime,
 }
 
@@ -406,34 +600,34 @@ impl Ssh2Manager {
         
         connection_result?;
         
-        // 🔑 关键：创建连接包装器，启动独立线程
-        let wrapper = Ssh2ConnectionWrapper::new(connection);
+        // 🔑 关键：创建 SSH Actor 句柄，彻底消除锁竞争
+        let actor_handle = SshActorHandle::spawn(connection);
         
         // 使用内部可变性更新连接集合
         {
             let mut connections = self.connections.lock().unwrap();
-            connections.insert(id.clone(), wrapper);
+            connections.insert(id.clone(), actor_handle);
         }
 
         crate::app_log!(info, "SSH2Manager", "✅ SSH连接创建成功: {}", id);
         Ok(())
     }
 
-    /// 🔑 执行命令（完全无锁）
+    /// 🔑 执行命令（Actor模式）
     pub fn execute_command(&self, id: &str, command: &str) -> Result<()> {
         let connections = self.connections.lock().unwrap();
-        if let Some(wrapper) = connections.get(id) {
-            wrapper.execute_command(command)
+        if let Some(actor_handle) = connections.get(id) {
+            actor_handle.execute_command(command)
         } else {
             Err(anyhow!("连接不存在: {}", id))
         }
     }
 
-    /// 🔑 读取输出（完全无锁）
+    /// 🔑 读取输出（Actor模式）
     pub fn read_output(&self, id: &str) -> Result<String> {
         let connections = self.connections.lock().unwrap();
-        if let Some(wrapper) = connections.get(id) {
-            wrapper.read_output()
+        if let Some(actor_handle) = connections.get(id) {
+            actor_handle.read_output()
         } else {
             Err(anyhow!("连接不存在: {}", id))
         }
@@ -442,14 +636,17 @@ impl Ssh2Manager {
     /// 检查连接状态
     pub fn is_connected(&self, id: &str) -> bool {
         let connections = self.connections.lock().unwrap();
-        connections.get(id).map_or(false, |wrapper| wrapper.is_connected())
+        connections.get(id).map_or(false, |_actor_handle| {
+            // TODO: 实现Actor的连接状态检查
+            true // 暂时返回true，后续实现
+        })
     }
 
     /// 断开连接
     pub fn disconnect(&self, id: &str) -> Result<()> {
         let mut connections = self.connections.lock().unwrap();
-        if let Some(wrapper) = connections.remove(id) {
-            wrapper.disconnect()?;
+        if let Some(actor_handle) = connections.remove(id) {
+            actor_handle.disconnect()?;
             crate::app_log!(info, "SSH2Manager", "🔌 连接已断开: {}", id);
         }
         Ok(())

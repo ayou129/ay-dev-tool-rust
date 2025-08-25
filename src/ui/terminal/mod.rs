@@ -2,7 +2,6 @@
 
 pub mod types;
 pub mod vt100_handler;
-pub mod content_extractor;
 pub mod emulator;
 
 // 重新导出公共接口

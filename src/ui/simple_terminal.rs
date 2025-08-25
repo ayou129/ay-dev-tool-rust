@@ -123,38 +123,57 @@ impl SimpleTerminalPanel {
         });
     }
     
-    /// 🔑 改进：直接从SSH2Manager读取输出
+    /// 🔑 批量读取SSH输出，避免重复处理
     fn receive_ssh_output(&mut self) {
         if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
-            // 直接从SSH2Manager读取数据，避免重复读取
-            match ssh_manager.read_output(tab_id) {
-                Ok(data) if !data.is_empty() => {
-                    crate::app_log!(debug, "UI", "📢 直接读取SSH输出: {} 字节", data.len());
-                    
-                    // 🔑 关键：检测是否为初始连接输出
-                    if !self.has_ssh_initial_output {
-                        self.has_ssh_initial_output = true;
-                        crate::app_log!(info, "UI", "🎉 收到SSH初始连接输出");
+            // 🔑 关键改进：批量读取所有可用数据，避免分帧处理导致重复
+            let mut all_data = String::new();
+            let mut read_count = 0;
+            
+            // 一次性读取所有可用数据
+            loop {
+                match ssh_manager.read_output(tab_id) {
+                    Ok(data) if !data.is_empty() => {
+                        all_data.push_str(&data);
+                        read_count += 1;
+                        
+                        // 防止无限循环，最多读取10次
+                        if read_count >= 10 {
+                            break;
+                        }
                     }
-                    
-                    // 🔑 关键：在显示到UI之前，先记录到日志
-                    if data.contains("连接已断开") {
-                        crate::app_log!(error, "UI", "🚨 SSH2连接断开，可能是认证失败");
-                        self.is_connected = false;
-                        self.connection_info = "连接已断开（可能是认证失败）".to_string();
+                    Ok(_) => {
+                        // 没有更多数据，退出循环
+                        break;
                     }
-                    
-                    // 📢 关键：所有数据都要显示在UI上，无论是成功还是失败信息
-                    self.process_ssh_data(data);
-                }
-                Ok(_) => {
-                    // 没有数据，这是正常的
-                }
-                Err(e) => {
-                    if !e.to_string().contains("连接不存在") {
-                        crate::app_log!(debug, "UI", "SSH读取错误: {}", e);
+                    Err(e) => {
+                        if !e.to_string().contains("连接不存在") {
+                            crate::app_log!(debug, "UI", "SSH读取错误: {}", e);
+                        }
+                        break;
                     }
                 }
+            }
+            
+            // 只有当确实有数据时才处理
+            if !all_data.is_empty() {
+                crate::app_log!(debug, "UI", "📦 批量读取SSH输出: {} 字节 ({} 次读取)", all_data.len(), read_count);
+                
+                // 🔑 关键：检测是否为初始连接输出
+                if !self.has_ssh_initial_output {
+                    self.has_ssh_initial_output = true;
+                    crate::app_log!(info, "UI", "🎉 收到SSH初始连接输出");
+                }
+                
+                // 🔑 关键：在显示到UI之前，先记录到日志
+                if all_data.contains("连接已断开") {
+                    crate::app_log!(error, "UI", "🚨 SSH2连接断开，可能是认证失败");
+                    self.is_connected = false;
+                    self.connection_info = "连接已断开（可能是认证失败）".to_string();
+                }
+                
+                // 📢 关键：一次性处理所有数据，避免重复处理
+                self.process_ssh_data(all_data);
             }
         }
     }
@@ -243,8 +262,9 @@ impl SimpleTerminalPanel {
                 return;
             }
 
-            // 显示用户输入
-            self.insert_text(format!("{} {}", self.current_prompt, command));
+            // 🔑 关键修改：移除手动插入命令显示，SSH终端会自动回显
+            // 之前的代码：self.insert_text(format!("{} {}", self.current_prompt, command));
+            // 现在直接发送命令，让SSH服务器处理回显
 
             if self.is_connected {
                 if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
@@ -297,16 +317,18 @@ impl SimpleTerminalPanel {
         self.insert_line(line);
     }
 
-    /// SSH数据处理入口：VT100解析 + 内容插入
+    /// SSH数据处理入口：VT100解析 + 屏幕状态更新
     pub fn process_ssh_data(&mut self, data: String) {
         // 🔑 关键：VT100解析在这里完成
         let result = self.terminal_emulator.process_pty_output(&data);
         
-        // VT100解析器返回什么就插入什么
+        // 🎯 关键修复：直接替换屏幕状态，而不是添加到历史缓冲区
+        self.output_buffer.clear();
         for line in result.lines {
+            // 只添加非空行
             if !line.is_empty() {
-                crate::app_log!(debug, "UI", "📝 插入VT100解析后的行: {}", line.text().trim());
-                self.insert_line(line);
+                crate::app_log!(debug, "UI", "📺 更新屏幕行: {}", line.text().trim());
+                self.output_buffer.push_back(line);
             }
         }
         
@@ -316,5 +338,7 @@ impl SimpleTerminalPanel {
                 self.current_prompt = prompt.trim().to_string();
             }
         }
+        
+        self.scroll_to_bottom = true;
     }
 }
