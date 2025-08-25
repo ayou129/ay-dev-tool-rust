@@ -6,5 +6,5 @@ pub mod content_extractor;
 pub mod emulator;
 
 // 重新导出公共接口
-pub use types::{TerminalSegment, TerminalLine, TerminalProcessResult};
+pub use types::{TerminalSegment, TerminalLine};
 pub use emulator::TerminalEmulator;

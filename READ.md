@@ -5,11 +5,16 @@
 
 主要功能如下：
 
-1. 核心：SSH终端连接 + 多标签管理 + 配置存储
+1. 核心：SSH2终端连接 + 多标签管理 + 配置存储
 2. 插件：系统监控(CPU/内存) + 文件浏览 + 软件检测
-3. 技术栈：Rust + egui + portable-pty + tokio
+3. 技术栈：Rust + egui + ssh2 + tokio
   - egui/eframe 统一实现UI，包括终端显示和性能监控
-  - portable-pty 实现终端连接
+  - ssh2 实现原生SSH连接和终端交互
+    - 选择ssh2的原因：
+      1. 性能问题
+      2. 连接任何终端，可以提前将密码和连接信息 同时一次性传递给终端，建立连接
+      3. 能够使用绝大多数的命令，包括vim等，可以编辑终端文件
+      4. 能够建立连接后捕获连接后的初始消息（包括 ANSI 转义序列）
   - tokio 实现异步
 
 详细功能如下：
@@ -117,17 +122,18 @@
     - `disk_info: Vec<DiskInfo>` - 磁盘信息列表，多个磁盘的使用情况
 
 #### 📁 SSH/网络层 (src/ssh/)
-- **mod.rs** - SSH模块入口，导出同步SSH实现
-- **sync.rs** - 完全同步的SSH连接实现，使用内部可变性和Arc<Mutex<>>
-  - `SyncSshConnection` - 同步SSH连接结构体
+- **mod.rs** - SSH模块入口，导出SSH2实现
+- **ssh2_client.rs** - 基于ssh2库的SSH连接实现，原生异步操作
+  - `Ssh2Connection` - SSH2连接结构体
+    - `session: ssh2::Session` - SSH2会话，主要的SSH连接对象
+    - `channel: ssh2::Channel` - SSH2通道，用于数据交互的虚拟终端
     - `config: ConnectionConfig` - 连接配置，存储主机、用户名、认证信息
-    - `writer: Box<dyn Write + Send>` - PTY写入器，发送命令到远程服务器
-    - `reader: Box<dyn Read + Send>` - PTY读取器，接收服务器响应数据
-    - `child_process: Box<dyn portable_pty::Child>` - 子进程句柄，管理SSH进程生命周期
+    - `tcp_stream: TcpStream` - TCP连接，底层网络通信
     - `is_connected: bool` - 连接状态标志，跟踪SSH连接是否活跃
-    - `password_sent: bool` - 密码发送标志，处理密码认证流程
-  - `SyncSshManager` - 同步SSH管理器结构体
-    - `connections: Mutex<HashMap<String, SyncSshConnection>>` - 连接池，管理多个SSH连接
+    - `terminal_size: (u16, u16)` - 终端尺寸，支持动态调整窗口大小
+  - `Ssh2Manager` - SSH2管理器结构体
+    - `connections: HashMap<String, Ssh2Connection>` - 连接池，管理多个SSH连接
+    - `runtime: tokio::runtime::Runtime` - 异步运行时，处理异步SSH操作
 
 #### 📁 UI层 (src/ui/)
 - **mod.rs** - UI模块入口，导出所有UI组件和配置类型
@@ -166,7 +172,7 @@
     - `input_buffer: String` - 输入缓冲区，暂存用户键盘输入
     - `scroll_to_bottom: bool` - 自动滚动标志，新输出时滚动到底部
     - `is_connected: bool` - 连接状态，控制UI显示和功能可用性
-    - `ssh_manager: Option<Arc<SyncSshManager>>` - SSH管理器引用，执行SSH操作
+    - `ssh_manager: Option<Arc<Ssh2Manager>>` - SSH2管理器引用，执行SSH操作
     - `tab_id: Option<String>` - Tab标识符，关联SSH连接
     - `current_prompt: String` - 当前提示符，显示服务器命令行提示
     - `terminal_emulator: TerminalEmulator` - 终端模拟器，处理ANSI序列
@@ -202,7 +208,7 @@
     - `active_tab_id: Option<String>` - 当前活跃Tab标识符
     - `observers: Vec<Box<dyn TabObserver>>` - 观察者列表，事件通知对象
     - `context: TabContext` - Tab上下文，共享资源和状态
-    - `ssh_manager: Arc<SyncSshManager>` - SSH管理器，处理所有SSH连接
+    - `ssh_manager: Arc<Ssh2Manager>` - SSH2管理器，处理所有SSH连接
   - `TabContext` - Tab上下文结构体
     - `config: AppConfig` - 应用配置，全局设置
     - `connection_manager: ConnectionManager` - 连接管理器，处理连接配置
@@ -273,67 +279,21 @@
 4. **模块化设计** - 每个模块职责单一，易于维护和扩展
 5. **简约优雅** - 遵循"简单优雅"原则，避免过度复杂的实现
 
-#### 🔧 代码优化计划 (高优先级)
+#### 🎯 当前架构特点 (已完成优化)
 
-##### 📋 问题分析
-经过代码审查，发现以下需要优化的问题：
+1. **模块化终端系统** ✅
+   - 已拆分为4个专门模块：`emulator.rs`、`vt100_handler.rs`、`content_extractor.rs`、`types.rs`
+   - 每个模块职责单一，符合单一职责原则
 
-1. **terminal_emulator.rs (653行)** - 过于复杂，违反简约原则
-   - `extract_terminal_content()` 方法100+行，逻辑复杂
-   - 大量VT100处理方法堆积在单一文件中
-   - 过多调试日志影响代码简洁性
+2. **设计模式应用** ✅
+   - Strategy模式：`TabContent` trait
+   - Factory模式：`TabFactory` 创建Tab
+   - Observer模式：`TabEvent` 和 `TabObserver`
 
-2. **错误处理不够优雅** - 13处`unwrap()`使用
-   - 应该使用`?`操作符进行优雅的错误传播
-   - 避免程序panic，提供更好的用户体验
-
-3. **性能优化机会** - 35处`clone()`调用
-   - 部分可以用引用替代，减少内存分配
-
-##### 🎯 优化方案
-
-**1. 拆分terminal_emulator.rs模块**
-```
-src/ui/terminal/
-├── mod.rs              - 模块入口，导出公共接口
-├── emulator.rs         - 核心终端模拟器，简化到<200行
-├── vt100_handler.rs    - VT100序列处理器，专门处理ANSI转义
-├── content_extractor.rs - 内容提取器，从VT100解析结果提取显示内容
-└── types.rs           - 终端相关类型定义
-```
-
-**2. 简化核心方法**
-- `extract_terminal_content()` 拆分为3个小方法：
-  - `extract_lines()` - 提取屏幕行内容
-  - `detect_prompt()` - 检测命令提示符
-  - `build_result()` - 构建处理结果
-- 每个方法不超过30行，职责单一
-
-**3. 优雅错误处理**
-- 替换所有`unwrap()`为`?`操作符或`unwrap_or_default()`
-- 在关键位置使用`Result<T, E>`返回类型
-- 添加适当的错误上下文信息
-
-**4. 性能优化**
-- 识别不必要的`clone()`调用
-- 使用引用传递替代值传递
-- 优化字符串处理，减少临时对象创建
-
-##### 📊 预期效果
-- **terminal_emulator.rs**: 653行 → ~150行 (核心)
-- **新增模块**: 4个专门文件，总计~300行
-- **方法复杂度**: 最大方法从100+行 → <30行
-- **错误处理**: 13个`unwrap()` → 0个
-- **代码风格**: 符合"简约优雅"原则
-
-##### 🔄 重构步骤
-1. 创建`src/ui/terminal/`目录结构
-2. 按功能拆分现有代码到新模块
-3. 简化`extract_terminal_content`方法
-4. 替换所有`unwrap()`调用
-5. 优化性能瓶颈点
-6. 更新相关导入和引用
-7. 测试重构后功能完整性
+3. **原生SSH2实现** ✅
+   - 基于`ssh2`库的原生SSH连接
+   - 支持完整的ANSI转义序列和交互式工具
+   - 使用异步Tokio实现高性能通信
 
 ### 实现之前的要求
 
@@ -349,7 +309,7 @@ src/ui/terminal/
 ## 项目其他说明
 
 - utils 下 的 logger.rs 是全局应用日志系统，日志会存储到 指定的.log 文件中
-  - 重要的功能的某些进度下需要记录 例如 ssh的 连接成功(连接信息)、连接失败(失败原因)、断开等 都需要记录
+  - 重要的功能的某些进度下需要记录 例如 SSH2的 连接成功(连接信息)、连接失败(失败原因)、断开等 都需要记录
 - 在菜单也称为tabs中，每一个tab都成为页面，也称为终端，这里我统称tab
   - tab有两个展示方式
     - 一个是统一的 终端列表
@@ -363,7 +323,7 @@ src/ui/terminal/
       - title
       - tab_id
       - connection_info
-      - ssh_manager
+      - ssh2_manager
       - ssh_status
       - current_prompt SSH服务器返回的 ANSI转义序列 的完整信息中的部分信息 例如macos返回的是: `(base) ➜  ~`
       - ...
@@ -373,9 +333,9 @@ src/ui/terminal/
       - 自然选择功能，例如 鼠标拖动可以选择段落，Ctrl+A 全选，Ctrl+C 复制
     - 底层实现
       - app 可以有多个 tab，每个tab包含一个终端，简化的同步调用，避免复杂的消息传递架构
-      - SSH + PTY 连接、断开、接收等命令 都是需要按照 SSH + PTY 的官方推荐的书写方案去实现 参考 doc/pyt-lib.rs 以及 <https://docs.rs/portable-pty/latest/portable_pty/>
-      - SSH + PTY 发送过来的消息
-        0. 在UI主循环中同步读取PTY数据，避免阻塞主线程
+      - SSH2 + 终端 连接、断开、接收等命令 都是需要按照 SSH2 的官方推荐的书写方案去实现 参考 <https://docs.rs/ssh2/latest/ssh2/>
+      - SSH2 发送过来的消息
+        0. 在UI主循环中异步读取SSH2数据，保证响应性
         1. 打印一次完整内容
         2. 将完整内容(实际内容和ANSI转义序列)交给VT100 去解析，配合各个组件实现功能
         - 要 适配 VT100 所有的 解析 功能(方法)，参考 doc/screen.rs 的实现

@@ -158,9 +158,9 @@ impl TerminalTab {
 impl TabContent for TerminalTab {
     fn get_title(&self) -> String {
         if self.terminal.is_connected {
-            format!("🟢 {}", self.title)
+            format!("🟢 {} (已连接)", self.title)
         } else {
-            format!("🔴 {}", self.title)
+            format!("🔴 {} (未连接)", self.title)
         }
     }
 
@@ -279,6 +279,12 @@ impl TabManager {
                         crate::app_log!(info, "TabManager", "SSH连接创建成功: {}@{}", 
                             config.username, config.host);
                         terminal_tab.terminal.is_connected = true;
+                        // 🎯 立即更新连接信息
+                        terminal_tab.terminal.connection_info = format!("{}@{}:{} - 已连接", 
+                            config.username, config.host, config.port);
+                        
+                        // 🔑 关键：连接成功后立即读取初始输出（登录信息和提示符）
+                        self.read_initial_ssh_output(&tab_id);
                     }
                     Err(e) => {
                         crate::app_log!(error, "TabManager", "SSH连接创建失败: {}", e);
@@ -368,8 +374,25 @@ impl TabManager {
             // 渲染所有Tab按钮
             for (tab_id, title, is_active, can_close) in tab_info {
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(is_active, &title).clicked() {
+                    // 🎨 改进：活跃Tab使用更明显的视觉样式
+                    let button_response = if is_active {
+                        ui.add(
+                            egui::Button::new(egui::RichText::new(&title)
+                                .color(egui::Color32::WHITE)
+                                .strong())
+                                .fill(egui::Color32::from_rgb(70, 130, 180))
+                                .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 160, 210)))
+                        )
+                    } else {
+                        ui.add(
+                            egui::Button::new(&title)
+                                .fill(egui::Color32::from_gray(240))
+                        )
+                    };
+                    
+                    if button_response.clicked() {
                         tab_to_switch = Some(tab_id.clone());
+                        crate::app_log!(info, "TabManager", "点击切换到Tab: {} ({})", title, tab_id);
                     }
                     
                     // 显示关闭按钮（如果Tab可以关闭）
@@ -391,6 +414,7 @@ impl TabManager {
         
         // 执行收集的操作
         if let Some(tab_id) = tab_to_switch {
+            crate::app_log!(info, "TabManager", "执行Tab切换: {}", tab_id);
             self.switch_tab(&tab_id);
         }
         
@@ -421,6 +445,31 @@ impl TabManager {
     pub fn save_config(&mut self) {
         if let Err(e) = self.context.config.save() {
             crate::app_log!(error, "TabManager", "保存配置失败: {}", e);
+        }
+    }
+    
+    /// 🔑 读取SSH连接的初始输出（登录信息和提示符）- 简化版本
+    fn read_initial_ssh_output(&mut self, tab_id: &str) {
+        crate::app_log!(info, "TabManager", "尝试读取SSH初始输出: {}", tab_id);
+        
+        // 立即尝试读取一次，不使用阻塞等待
+        match self.ssh_manager.read_output(tab_id) {
+            Ok(data) if !data.is_empty() => {
+                crate::app_log!(info, "TabManager", "读取到SSH初始输出: {} 字节", data.len());
+                
+                // 将初始输出传递给终端Tab
+                if let Some(terminal_tab) = self.tabs.get_mut(tab_id) {
+                    if let Some(term_tab) = terminal_tab.as_any_mut().downcast_mut::<TerminalTab>() {
+                        term_tab.terminal.add_pty_output(data);
+                    }
+                }
+            }
+            Ok(_) => {
+                crate::app_log!(debug, "TabManager", "SSH初始输出暂时为空，稍后在UI循环中读取");
+            }
+            Err(e) => {
+                crate::app_log!(warn, "TabManager", "SSH初始输出读取错误: {}", e);
+            }
         }
     }
 }

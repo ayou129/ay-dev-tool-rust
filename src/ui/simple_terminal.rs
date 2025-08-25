@@ -124,14 +124,25 @@ impl SimpleTerminalPanel {
         if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
             match ssh_manager.read_output(tab_id) {
                 Ok(data) if !data.is_empty() => {
-                    crate::app_log!(debug, "UI", "同步读取到SSH输出: {} 字节", data.len());
+                    crate::app_log!(info, "UI", "📺 同步读取到SSH输出: {} 字节，内容: {:?}", data.len(), data);
+                    
+                    // 🔑 关键：在显示到UI之前，先记录到日志
+                    if data.contains("连接已断开") {
+                        crate::app_log!(error, "UI", "🚨 SSH连接断开，可能是认证失败");
+                        self.is_connected = false;
+                        self.connection_info = "连接已断开（可能是认证失败）".to_string();
+                    }
+                    
+                    // 📺 关键：所有数据都要显示在UI上，无论是成功还是失败信息
                     self.add_pty_output(data);
                 }
                 Ok(_) => {
-                    // 没有数据，正常情况
+                    // 没有数据，正常情况，不记录日志以避免垃圾
                 }
                 Err(e) => {
-                    crate::app_log!(debug, "UI", "SSH输出读取错误: {}", e);
+                    crate::app_log!(warn, "UI", "SSH输出读取错误: {}", e);
+                    // 🔑 错误信息也要显示在UI上
+                    self.add_output(format!("错误: {}", e));
                 }
             }
         }
@@ -272,7 +283,7 @@ impl SimpleTerminalPanel {
     }
 
     /// 添加PTY输出（带VT100解析）
-    fn add_pty_output(&mut self, data: String) {
+    pub fn add_pty_output(&mut self, data: String) {
         // 使用VT100解析器处理数据
         let result = self.terminal_emulator.process_pty_output(&data);
         
