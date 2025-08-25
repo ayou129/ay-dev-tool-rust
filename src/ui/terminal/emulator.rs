@@ -149,22 +149,32 @@ impl TerminalEmulator {
         line
     }
     
-    /// 检测命令提示符
+    /// 检测命令提示符 - 修复版本
     fn detect_prompt(&self, screen: &vt100::Screen) -> Option<String> {
-        let (cursor_row, _) = screen.cursor_position();
+        let (cursor_row, cursor_col) = screen.cursor_position();
         
-        if cursor_row >= 1 {
-            let current_line = self.extract_line_from_screen(cursor_row - 1, screen);
-            let text = current_line.text().trim().to_string();
-            
-            if !text.is_empty() && !text.starts_with("Last login") {
-                Some(text)
+        // 🎯 关键修复：从光标所在行提取提示符
+        let current_line = self.extract_line_from_screen(cursor_row, screen);
+        let line_text = current_line.text();
+        
+        // 🔑 提取光标位置之前的内容作为提示符
+        if cursor_col > 0 && !line_text.trim().is_empty() {
+            let prompt_text = if cursor_col as usize <= line_text.len() {
+                line_text[..cursor_col as usize].trim().to_string()
             } else {
-                None
+                line_text.trim().to_string()
+            };
+            
+            // 过滤掉不需要的内容
+            if !prompt_text.is_empty() 
+                && !prompt_text.starts_with("Last login") 
+                && !prompt_text.contains("from ") {
+                crate::app_log!(debug, "VT100", "🎯 检测到提示符: '{}' (光标位置: {}:{})", prompt_text, cursor_row, cursor_col);
+                return Some(prompt_text);
             }
-        } else {
-            None
         }
+        
+        None
     }
     
     /// 将VT100颜色转换为egui颜色

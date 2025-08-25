@@ -118,8 +118,7 @@ impl SimpleTerminalPanel {
 
             ui.separator();
 
-            // 输入区域
-            self.render_input_area(ui);
+            // 🎯 输入已集成到终端内容中，不再需要单独的输入区域
         });
     }
     
@@ -178,9 +177,24 @@ impl SimpleTerminalPanel {
         }
     }
 
-    /// 渲染终端输出
+    /// 渲染终端输出 + 内嵌式输入（完全重写版）
     fn render_terminal_output(&mut self, ui: &mut egui::Ui) {
-        let available_height = ui.available_height() - 60.0; // 为输入区域留出空间
+        let available_height = ui.available_height();
+        let mut should_execute_command = false;
+        
+        // 🎯 关键修复：先复制所有需要的数据，避免借用冲突
+        let lines: Vec<_> = self.output_buffer.iter().cloned().collect();
+        let current_prompt = self.current_prompt.clone();
+        let is_connected = self.is_connected;
+        
+        // 找到最后一行非空内容
+        let mut last_non_empty_index = None;
+        for (index, line) in lines.iter().enumerate().rev() {
+            if !line.is_empty() {
+                last_non_empty_index = Some(index);
+                break;
+            }
+        }
         
         egui::ScrollArea::vertical()
             .max_height(available_height)
@@ -189,18 +203,35 @@ impl SimpleTerminalPanel {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 
-                for line in &self.output_buffer {
-                    self.render_terminal_line(ui, line);
+                // 渲染所有终端内容
+                for (index, line) in lines.iter().enumerate() {
+                    if Some(index) == last_non_empty_index && is_connected {
+                        // 最后一行非空内容：显示内容 + 输入框
+                        should_execute_command = Self::render_line_with_input_static(ui, line, &mut self.input_buffer);
+                    } else {
+                        // 普通行：只显示内容
+                        Self::render_terminal_line_static(ui, line);
+                    }
+                }
+                
+                // 如果没有任何非空内容，显示单独输入行
+                if last_non_empty_index.is_none() && is_connected {
+                    should_execute_command = Self::render_integrated_input_line_static(ui, &current_prompt, &mut self.input_buffer);
                 }
             });
 
         if self.scroll_to_bottom {
             self.scroll_to_bottom = false;
         }
+        
+        // 处理命令执行
+        if should_execute_command {
+            self.execute_command();
+        }
     }
 
-    /// 渲染单行终端内容
-    fn render_terminal_line(&self, ui: &mut egui::Ui, line: &TerminalLine) {
+    /// 渲染单行终端内容（静态版本）
+    fn render_terminal_line_static(ui: &mut egui::Ui, line: &TerminalLine) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             
@@ -226,29 +257,91 @@ impl SimpleTerminalPanel {
             }
         });
     }
-
-    /// 渲染输入区域
-    fn render_input_area(&mut self, ui: &mut egui::Ui) {
+    
+    /// 🎯 渲染带输入框的行（静态版本）
+    fn render_line_with_input_static(ui: &mut egui::Ui, line: &TerminalLine, input_buffer: &mut String) -> bool {
+        let mut should_execute = false;
+        
         ui.horizontal(|ui| {
-            // 显示提示符
+            ui.spacing_mut().item_spacing.x = 0.0;
+            
+            // 先渲染行内容
+            for segment in &line.segments {
+                if segment.text.is_empty() {
+                    continue;
+                }
+                
+                let mut rich_text = egui::RichText::new(&segment.text)
+                    .font(egui::FontId::monospace(14.0));
+                
+                if let Some(color) = segment.color {
+                    rich_text = rich_text.color(color);
+                } else {
+                    rich_text = rich_text.color(egui::Color32::BLACK);
+                }
+                
+                if let Some(bg_color) = segment.background_color {
+                    rich_text = rich_text.background_color(bg_color);
+                }
+                
+                ui.add(egui::Label::new(rich_text).selectable(true));
+            }
+            
+            // 在同一行后面添加输入框
+            let response = ui.add(
+                egui::TextEdit::singleline(input_buffer)
+                    .font(egui::FontId::monospace(14.0))
+                    .desired_width(ui.available_width())
+                    .frame(false)
+            );
+            
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                should_execute = true;
+            }
+            
+            if !response.has_focus() {
+                response.request_focus();
+            }
+        });
+        
+        should_execute
+    }
+    
+    /// 🎯 渲染内嵌式输入行（静态版本）
+    fn render_integrated_input_line_static(ui: &mut egui::Ui, current_prompt: &str, input_buffer: &mut String) -> bool {
+        let mut should_execute = false;
+        
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            
             ui.add(egui::Label::new(
-                egui::RichText::new(&self.current_prompt)
+                egui::RichText::new(current_prompt)
                     .font(egui::FontId::monospace(14.0))
                     .color(egui::Color32::BLUE)
             ));
-
-            // 输入框
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.input_buffer)
+            
+            ui.add(egui::Label::new(
+                egui::RichText::new(" ")
                     .font(egui::FontId::monospace(14.0))
-                    .desired_width(ui.available_width() - 100.0)
+            ));
+            
+            let response = ui.add(
+                egui::TextEdit::singleline(input_buffer)
+                    .font(egui::FontId::monospace(14.0))
+                    .desired_width(ui.available_width())
+                    .frame(false)
             );
-
-            // 发送按钮
-            if ui.button("发送").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                self.execute_command();
+            
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                should_execute = true;
+            }
+            
+            if !response.has_focus() {
+                response.request_focus();
             }
         });
+        
+        should_execute
     }
 
     /// 🔑 真正简单的命令执行（同步，无回调）
@@ -317,28 +410,26 @@ impl SimpleTerminalPanel {
         self.insert_line(line);
     }
 
-    /// SSH数据处理入口：VT100解析 + 屏幕状态更新
+    /// SSH数据处理入口：VT100解析 + 屏幕状态更新（修复版）
     pub fn process_ssh_data(&mut self, data: String) {
         // 🔑 关键：VT100解析在这里完成
         let result = self.terminal_emulator.process_pty_output(&data);
         
-        // 🎯 关键修复：直接替换屏幕状态，而不是添加到历史缓冲区
+        // 🎯 关键修复：直接使用VT100屏幕状态，不做增量处理
         self.output_buffer.clear();
         for line in result.lines {
-            // 只添加非空行
-            if !line.is_empty() {
-                crate::app_log!(debug, "UI", "📺 更新屏幕行: {}", line.text().trim());
-                self.output_buffer.push_back(line);
-            }
+            // 🔑 重要：保留所有行，包括空行（VT100屏幕状态是完整的）
+            self.output_buffer.push_back(line);
         }
         
         // 更新提示符
         if let Some(prompt) = result.prompt_update {
-            if !prompt.trim().is_empty() {
+            if !prompt.trim().is_empty() && !prompt.contains("Last login") {
                 self.current_prompt = prompt.trim().to_string();
             }
         }
         
         self.scroll_to_bottom = true;
+        crate::app_log!(debug, "UI", "📺 VT100屏幕状态更新完成: {} 行", self.output_buffer.len());
     }
 }
