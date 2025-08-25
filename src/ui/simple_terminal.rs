@@ -1,5 +1,5 @@
 use crate::ssh::SyncSshManager;
-use crate::ui::terminal_emulator::{TerminalEmulator, TerminalLine};
+use crate::ui::terminal::{TerminalEmulator, TerminalLine};
 use crate::ui::ConnectionConfig;
 
 use eframe::egui;
@@ -251,7 +251,7 @@ impl SimpleTerminalPanel {
     fn add_output(&mut self, text: String) {
         // 简单创建TerminalLine
         let mut line = TerminalLine::new();
-        line.segments.push(crate::ui::terminal_emulator::TerminalSegment {
+        line.segments.push(crate::ui::terminal::TerminalSegment {
             text,
             color: Some(egui::Color32::BLACK),
             background_color: None,

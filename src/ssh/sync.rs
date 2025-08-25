@@ -178,7 +178,7 @@ impl SyncSshManager {
         crate::app_log!(info, "SSH", "创建同步SSH连接: {}", id);
         
         let connection = SyncSshConnection::create(config)?;
-        let mut connections = self.connections.lock().unwrap();
+        let mut connections = self.connections.lock().map_err(|_| anyhow::anyhow!("Failed to acquire lock"))?;
         connections.insert(id.clone(), connection);
         
         crate::app_log!(info, "SSH", "同步SSH连接已添加: {}", id);
@@ -189,7 +189,7 @@ impl SyncSshManager {
     pub fn execute_command(&self, id: &str, command: &str) -> Result<()> {
         crate::app_log!(info, "SSH", "同步执行命令 '{}' 在连接 '{}'", command, id);
         
-        let mut connections = self.connections.lock().unwrap();
+        let mut connections = self.connections.lock().map_err(|_| anyhow::anyhow!("Failed to acquire lock"))?;
         if let Some(connection) = connections.get_mut(id) {
             connection.send_command(command)
         } else {
@@ -199,7 +199,7 @@ impl SyncSshManager {
 
     /// 读取连接的输出（同步）
     pub fn read_output(&self, id: &str) -> Result<String> {
-        let mut connections = self.connections.lock().unwrap();
+        let mut connections = self.connections.lock().map_err(|_| anyhow::anyhow!("Failed to acquire lock"))?;
         if let Some(connection) = connections.get_mut(id) {
             connection.read_output()
         } else {
@@ -210,15 +210,19 @@ impl SyncSshManager {
     /// 断开连接
     pub fn disconnect(&self, id: &str) {
         crate::app_log!(info, "SSH", "断开连接: {}", id);
-        let mut connections = self.connections.lock().unwrap();
-        if let Some(mut connection) = connections.remove(id) {
-            let _ = connection.disconnect();
+        if let Ok(mut connections) = self.connections.lock() {
+            if let Some(mut connection) = connections.remove(id) {
+                let _ = connection.disconnect();
+            }
         }
     }
 
     /// 检查连接状态
     pub fn is_connected(&self, id: &str) -> bool {
-        let connections = self.connections.lock().unwrap();
+        let connections = match self.connections.lock() {
+            Ok(conn) => conn,
+            Err(_) => return false,
+        };
         connections.get(id).map_or(false, |conn| conn.is_connected)
     }
 }

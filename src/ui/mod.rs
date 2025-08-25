@@ -1,6 +1,7 @@
 pub mod connection_manager;
 pub mod plugins_panel;
 pub mod terminal_emulator;
+pub mod terminal;
 pub mod simple_terminal;
 pub mod tab_system;
 

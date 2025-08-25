@@ -106,11 +106,9 @@ impl PluginsPanel {
 
     fn show_system_monitor_panel(&mut self, ui: &mut egui::Ui) {
         // 更新系统信息
-        if let Ok(_) = tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(self.system_monitor.update())
-        {
-            let data = self.system_monitor.render_data();
+        if let Ok(runtime) = tokio::runtime::Runtime::new() {
+            if let Ok(_) = runtime.block_on(self.system_monitor.update()) {
+                let data = self.system_monitor.render_data();
 
             if let Some(cpu_avg) = data["cpu"]["average_usage"].as_f64() {
                 self.cpu_history.push_back(cpu_avg);
@@ -206,6 +204,7 @@ impl PluginsPanel {
                     });
                 }
             }
+            }
         }
     }
 
@@ -217,10 +216,12 @@ impl PluginsPanel {
             .clicked()
         {
             // 启动软件检测
-            let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                self.software_detector.initialize().await?;
-                self.software_detector.update().await
-            });
+            if let Ok(runtime) = tokio::runtime::Runtime::new() {
+                let _ = runtime.block_on(async {
+                    self.software_detector.initialize().await?;
+                    self.software_detector.update().await
+                });
+            }
         }
 
         let data = self.software_detector.render_data();
@@ -288,10 +289,12 @@ impl PluginsPanel {
             .button(egui::RichText::new(format!("{} 刷新", regular::ARROW_CLOCKWISE)).size(14.0))
             .clicked()
         {
-            let _ = tokio::runtime::Runtime::new().unwrap().block_on(async {
-                self.file_browser.initialize().await?;
-                self.file_browser.update().await
-            });
+            if let Ok(runtime) = tokio::runtime::Runtime::new() {
+                let _ = runtime.block_on(async {
+                    self.file_browser.initialize().await?;
+                    self.file_browser.update().await
+                });
+            }
         }
 
         let data = self.file_browser.render_data();
@@ -337,9 +340,9 @@ impl PluginsPanel {
                                     );
                                     new_path.push(name);
                                     self.file_browser.set_path(new_path);
-                                    let _ = tokio::runtime::Runtime::new()
-                                        .unwrap()
-                                        .block_on(async { self.file_browser.update().await });
+                                    if let Ok(runtime) = tokio::runtime::Runtime::new() {
+                                        let _ = runtime.block_on(async { self.file_browser.update().await });
+                                    }
                                 }
                             } else {
                                 ui.label(egui::RichText::new(icon).size(14.0));

@@ -41,7 +41,7 @@ fn setup_custom_fonts(ctx: &egui::Context) {
                 fonts
                     .families
                     .get_mut(&egui::FontFamily::Monospace)
-                    .unwrap()
+                    .unwrap_or(&mut Vec::new())
                     .insert(0, font_name.to_string());
 
                 log::info!("成功加载等宽字体: {} ({})", font_name, font_path);
@@ -63,14 +63,14 @@ fn setup_custom_fonts(ctx: &egui::Context) {
                 fonts
                     .families
                     .get_mut(&egui::FontFamily::Monospace)
-                    .unwrap()
+                    .unwrap_or(&mut Vec::new())
                     .push(chinese_font_id.clone());
 
                 // 中文字体用于比例字体
                 fonts
                     .families
                     .get_mut(&egui::FontFamily::Proportional)
-                    .unwrap()
+                    .unwrap_or(&mut Vec::new())
                     .insert(0, chinese_font_id);
 
                 log::info!("成功加载中文字体: {} ({})", font_name, font_path);
@@ -109,7 +109,9 @@ fn main() -> eframe::Result<()> {
     // ✅ 清除旧的日志文件内容
     utils::logger::clear_log_file();
     
-    logger.lock().unwrap().info("App", "应用程序启动");
+    if let Ok(logger) = logger.lock() {
+        logger.info("App", "应用程序启动");
+    }
 
     // 记录日志文件路径
     if let Ok(log_instance) = logger.lock()
