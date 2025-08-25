@@ -82,22 +82,34 @@ impl TerminalEmulator {
         self.parser = vt100::Parser::new(self.height, self.width, 1000);
     }
 
-    /// 🔑 从 VT100 屏幕直接获取完整状态(无增量处理，就像iTerm2一样)
+    /// 🔑 从 VT100 屏幕直接获取完整状态(优化版，去除尾部空行)
     fn extract_screen_content(&self) -> TerminalProcessResult {
         let screen = self.parser.screen();
         let mut lines = Vec::new();
         
-        // 🎯 关键修复：获取屏幕完整状态，让UI自己处理差异
-        for row in 0..screen.size().0 {
+        // 🎯 关键修复：从屏幕获取所有行，但只保留有内容的部分
+        let screen_height = screen.size().0;
+        let mut last_content_row = 0;
+        
+        // 首先找到最后一行有内容的行
+        for row in (0..screen_height).rev() {
             let line = self.extract_line_from_screen(row, &screen);
-            // 🔑 重要：所有行都返回，包括空行，让UI决定如何显示
+            if !line.is_empty() {
+                last_content_row = row;
+                break;
+            }
+        }
+        
+        // 只返回到最后一行有内容的行，避免大量空行
+        for row in 0..=last_content_row {
+            let line = self.extract_line_from_screen(row, &screen);
             lines.push(line);
         }
         
         // 检测提示符(从光标位置)
         let prompt_update = self.detect_prompt(&screen);
         
-        crate::app_log!(debug, "VT100", "📺 屏幕状态更新: {} 行", lines.len());
+        crate::app_log!(debug, "VT100", "📺 屏幕状态更新: {} 行 (最后内容行: {})", lines.len(), last_content_row);
         
         TerminalProcessResult {
             lines,

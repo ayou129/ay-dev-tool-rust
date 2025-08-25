@@ -182,12 +182,31 @@ impl SimpleTerminalPanel {
     fn render_terminal_output(&mut self, ui: &mut egui::Ui) {
         let available_height = ui.available_height();
         let mut should_execute_command = false;
-        let mut should_send_tab = false;
+        let mut special_key_to_send: Option<String> = None;
         
         // 🎯 关键修复：先复制所有需要的数据，避免借用冲突
         let lines: Vec<_> = self.output_buffer.iter().cloned().collect();
         let current_prompt = self.current_prompt.clone();
         let is_connected = self.is_connected;
+        
+        // 🔑 关键改进：获取VT100解析器的光标位置信息
+        let cursor_position = self.terminal_emulator.cursor_position();
+        // 🔑 重要修复：VT100坐标与数组索引的对应关系
+        // VT100行1列12 -> 应该对应数组索引[1][11]（即第1行第12个字符）
+        let cursor_row = cursor_position.0.saturating_sub(1) as usize; // VT100行号从1开始，数组从0开始
+        let cursor_col = cursor_position.1.saturating_sub(1) as usize; // VT100列号从1开始，数组从0开始
+        
+        // crate::app_log!(debug, "UI", "📍 VT100光标原始位置: 行{}，列{} -> 数组索引: 行{}，列{}", 
+            // cursor_position.0, cursor_position.1, cursor_row, cursor_col);
+        
+        // 🔍 调试信息：打印终端内容情况
+        // crate::app_log!(debug, "UI", "📊 终端内容总行数: {}", lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            if !line.is_empty() {
+                let line_text = line.text();
+                // crate::app_log!(debug, "UI", "📝 第{}行: '{}'", i, line_text.chars().take(50).collect::<String>());
+            }
+        }
         
         // 找到最后一行非空内容
         let mut last_non_empty_index = None;
@@ -198,6 +217,10 @@ impl SimpleTerminalPanel {
             }
         }
         
+        // 🎯 检测是否在全屏应用模式（如vim）
+        let in_fullscreen_app = self.is_in_fullscreen_app(&lines);
+        // crate::app_log!(debug, "UI", "🔍 全屏应用检测结果: {}", in_fullscreen_app);
+        
         egui::ScrollArea::vertical()
             .max_height(available_height)
             .auto_shrink([false, false])
@@ -205,25 +228,52 @@ impl SimpleTerminalPanel {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 
-                // 渲染所有终端内容
+                // 🔑 关键修复：使用语义化的输入框显示逻辑
+                // 不完全依赖VT100报告的光标位置，而是基于终端内容的语义来判断
                 for (index, line) in lines.iter().enumerate() {
-                    if Some(index) == last_non_empty_index && is_connected {
-                        // 最后一行非空内容：显示内容 + 输入框
-                        let (exec_cmd, send_tab) = Self::render_line_with_input_static_enhanced(ui, line, &mut self.input_buffer);
+                    let line_text = line.text();
+                    
+                    // 检查是否是包含提示符的行（语义判断）
+                    let is_prompt_line = line_text.contains("➜") || 
+                                        line_text.contains("$") || 
+                                        line_text.contains("#") ||
+                                        line_text.starts_with("(") && line_text.contains(")") && line_text.contains("~");
+                    
+                    // 如果是提示符行且是最后一个提示符行，显示输入框
+                    let should_show_input = is_prompt_line && is_connected && !in_fullscreen_app && {
+                        // 检查是否是最后一个提示符行
+                        let mut is_last_prompt = true;
+                        for (later_index, later_line) in lines.iter().enumerate().skip(index + 1) {
+                            let later_text = later_line.text();
+                            if later_text.contains("➜") || later_text.contains("$") || later_text.contains("#") {
+                                is_last_prompt = false;
+                                break;
+                            }
+                        }
+                        is_last_prompt
+                    };
+                    
+                    if should_show_input {
+                        // crate::app_log!(debug, "UI", "📝 在提示符行({}): '{}' 显示输入框", index, line_text.chars().take(30).collect::<String>());
+                        let (exec_cmd, special_key) = Self::render_line_with_input_static_enhanced(ui, line, &mut self.input_buffer);
                         should_execute_command = exec_cmd;
-                        should_send_tab = send_tab;
+                        special_key_to_send = special_key;
                     } else {
                         // 普通行：只显示内容
                         Self::render_terminal_line_static(ui, line);
+                        
+                        if is_prompt_line {
+                            // crate::app_log!(debug, "UI", "ℹ️ 提示符行({})但不是最后一个: '{}'", index, line_text.chars().take(30).collect::<String>());
+                        }
                     }
                 }
                 
-                // 如果没有任何非空内容，显示单独输入行
-                if last_non_empty_index.is_none() && is_connected {
-                    crate::app_log!(info, "UI", "📝 显示单独输入行");
-                    let (exec_cmd, send_tab) = Self::render_integrated_input_line_static_enhanced(ui, &current_prompt, &mut self.input_buffer);
+                // 如果没有任何提示符行，显示单独输入行（备用）
+                if lines.is_empty() && is_connected && !in_fullscreen_app {
+                    // crate::app_log!(info, "UI", "📝 无终端内容，显示单独输入行");
+                    let (exec_cmd, special_key) = Self::render_integrated_input_line_static_enhanced(ui, &current_prompt, &mut self.input_buffer);
                     should_execute_command = exec_cmd;
-                    should_send_tab = send_tab;
+                    special_key_to_send = special_key;
                 }
             });
 
@@ -237,9 +287,9 @@ impl SimpleTerminalPanel {
             self.execute_command();
         }
         
-        // 🎯 关键新增：处理Tab键自动补全
-        if should_send_tab {
-            self.send_tab_completion();
+        // 🎯 关键新增：处理特殊按键发送（统一通道）
+        if let Some(special_key) = special_key_to_send {
+            self.send_special_key(&special_key);
         }
     }
 
@@ -271,10 +321,13 @@ impl SimpleTerminalPanel {
         });
     }
     
-    /// 🎯 渲染带输入框的行（增强版 - 支持Tab补全）
-    fn render_line_with_input_static_enhanced(ui: &mut egui::Ui, line: &TerminalLine, input_buffer: &mut String) -> (bool, bool) {
+    /// 🎯 渲染带输入框的行（增强版 - 支持特殊按键处理和实时字符发送）
+    fn render_line_with_input_static_enhanced(ui: &mut egui::Ui, line: &TerminalLine, input_buffer: &mut String) -> (bool, Option<String>) {
         let mut should_execute = false;
-        let mut should_send_tab = false;
+        let mut special_key_to_send = None;
+        
+        // 📝 记录输入前的内容，用于检测变化
+        let previous_content = input_buffer.clone();
         
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -314,15 +367,14 @@ impl SimpleTerminalPanel {
             response.request_focus();
             
             if response.has_focus() {
-                // 方法1：检测回车键按下（优先）
-                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let tab_pressed = ui.input(|i| i.key_pressed(egui::Key::Tab));
+                // 🔑 特殊按键检测（优先级最高）
+                special_key_to_send = Self::detect_special_keys(ui);
                 
+                // 回车键检测
+                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if enter_pressed {
                     should_execute = true;
                     crate::app_log!(info, "UI", "🚀 检测到回车键按下！");
-                } else if tab_pressed {
-                    should_send_tab = true;
                 }
             }
             
@@ -333,15 +385,44 @@ impl SimpleTerminalPanel {
             }
         });
         
-        (should_execute, should_send_tab)
+        // 🔑 核心新增：检测输入内容变化，实时发送新字符
+        if previous_content != *input_buffer && special_key_to_send.is_none() {
+            // 找出新增的字符
+            if input_buffer.len() > previous_content.len() {
+                let new_chars = &input_buffer[previous_content.len()..];
+                crate::app_log!(debug, "UI", "🔤 检测到新输入字符: {:?}", new_chars);
+                
+                // 实时发送新字符（作为特殊键处理）
+                special_key_to_send = Some(new_chars.to_string());
+                
+                // 🔑 关键修复：实时发送后，清空输入缓冲区，避免重复发送
+                // SSH服务器会回显字符，我们不需要在本地保存
+                input_buffer.clear();
+                crate::app_log!(debug, "UI", "🧹 实时发送后清空输入缓冲区");
+                
+            } else if input_buffer.len() < previous_content.len() {
+                // 检测到删除操作（Backspace）
+                let deleted_count = previous_content.len() - input_buffer.len();
+                crate::app_log!(debug, "UI", "⬅️ 检测到删除操作: {} 个字符", deleted_count);
+                
+                // 发送对应数量的退格键
+                let backspace_chars = "\x08".repeat(deleted_count);
+                special_key_to_send = Some(backspace_chars);
+            }
+        }
+        
+        (should_execute, special_key_to_send)
     }
     
-    /// 🎯 渲染内嵌式输入行（增强版 - 支持Tab补全）
-    fn render_integrated_input_line_static_enhanced(ui: &mut egui::Ui, current_prompt: &str, input_buffer: &mut String) -> (bool, bool) {
+    /// 🎯 渲染内嵌式输入行（增强版 - 支持特殊按键处理和实时字符发送）
+    fn render_integrated_input_line_static_enhanced(ui: &mut egui::Ui, current_prompt: &str, input_buffer: &mut String) -> (bool, Option<String>) {
         crate::app_log!(info, "UI", "📝 render_integrated_input_line_static_enhanced() 被调用");
         
         let mut should_execute = false;
-        let mut should_send_tab = false;
+        let mut special_key_to_send = None;
+        
+        // 📝 记录输入前的内容，用于检测变化
+        let previous_content = input_buffer.clone();
         
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -366,16 +447,14 @@ impl SimpleTerminalPanel {
             
             // 🎯 关键修复：使用更可靠的按键检测方式
             if response.has_focus() {
-                // 方法1：检测回车键按下（优先）
-                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let tab_pressed = ui.input(|i| i.key_pressed(egui::Key::Tab));
+                // 🔑 特殊按键检测（优先级最高）
+                special_key_to_send = Self::detect_special_keys(ui);
                 
+                // 回车键检测
+                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if enter_pressed {
                     should_execute = true;
                     crate::app_log!(debug, "UI", "🔑 检测到回车键按下（集成输入行）");
-                } else if tab_pressed {
-                    should_send_tab = true;
-                    crate::app_log!(debug, "UI", "🔑 检测到Tab键按下（集成输入行）");
                 }
             }
             
@@ -392,38 +471,131 @@ impl SimpleTerminalPanel {
             }
         });
         
-        (should_execute, should_send_tab)
+        // 🔑 核心新增：检测输入内容变化，实时发送新字符
+        if previous_content != *input_buffer && special_key_to_send.is_none() {
+            // 找出新增的字符
+            if input_buffer.len() > previous_content.len() {
+                let new_chars = &input_buffer[previous_content.len()..];
+                crate::app_log!(debug, "UI", "🔤 检测到新输入字符: {:?}", new_chars);
+                
+                // 实时发送新字符（作为特殊键处理）
+                special_key_to_send = Some(new_chars.to_string());
+                
+                // 🔑 关键修复：实时发送后，清空输入缓冲区，避免重复发送
+                // SSH服务器会回显字符，我们不需要在本地保存
+                input_buffer.clear();
+                crate::app_log!(debug, "UI", "🧹 实时发送后清空输入缓冲区");
+                
+            } else if input_buffer.len() < previous_content.len() {
+                // 检测到删除操作（Backspace）
+                let deleted_count = previous_content.len() - input_buffer.len();
+                crate::app_log!(debug, "UI", "⬅️ 检测到删除操作: {} 个字符", deleted_count);
+                
+                // 发送对应数量的退格键
+                let backspace_chars = "\x08".repeat(deleted_count);
+                special_key_to_send = Some(backspace_chars);
+            }
+        }
+        
+        (should_execute, special_key_to_send)
     }
 
-    /// 🔑 真正简单的命令执行（同步，无回调）
+    /// 🔑 新增：特殊按键检测方法
+    fn detect_special_keys(ui: &mut egui::Ui) -> Option<String> {
+        ui.input(|i| {
+            // Tab 键 - 自动补全
+            if i.key_pressed(egui::Key::Tab) {
+                crate::app_log!(debug, "UI", "🎯 检测到Tab键");
+                return Some("\t".to_string());
+            }
+            
+            // 方向键 - 光标移动和历史记录
+            if i.key_pressed(egui::Key::ArrowUp) {
+                crate::app_log!(debug, "UI", "⬆️ 检测到上箭头键");
+                return Some("\x1b[A".to_string()); // ANSI 上箭头序列
+            }
+            if i.key_pressed(egui::Key::ArrowDown) {
+                crate::app_log!(debug, "UI", "⬇️ 检测到下箭头键");
+                return Some("\x1b[B".to_string()); // ANSI 下箭头序列
+            }
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                crate::app_log!(debug, "UI", "⬅️ 检测到左箭头键");
+                return Some("\x1b[D".to_string()); // ANSI 左箭头序列
+            }
+            if i.key_pressed(egui::Key::ArrowRight) {
+                crate::app_log!(debug, "UI", "➡️ 检测到右箭头键");
+                return Some("\x1b[C".to_string()); // ANSI 右箭头序列
+            }
+            
+            // Home/End 键
+            if i.key_pressed(egui::Key::Home) {
+                crate::app_log!(debug, "UI", "🏠 检测到Home键");
+                return Some("\x1b[H".to_string()); // ANSI Home序列
+            }
+            if i.key_pressed(egui::Key::End) {
+                crate::app_log!(debug, "UI", "🏁 检测到End键");
+                return Some("\x1b[F".to_string()); // ANSI End序列
+            }
+            
+            // Page Up/Down 键
+            if i.key_pressed(egui::Key::PageUp) {
+                crate::app_log!(debug, "UI", "🔼 检测到PageUp键");
+                return Some("\x1b[5~".to_string()); // ANSI PageUp序列
+            }
+            if i.key_pressed(egui::Key::PageDown) {
+                crate::app_log!(debug, "UI", "🔽 检测到PageDown键");
+                return Some("\x1b[6~".to_string()); // ANSI PageDown序列
+            }
+            
+            // Delete/Backspace 键
+            if i.key_pressed(egui::Key::Delete) {
+                crate::app_log!(debug, "UI", "🗑️ 检测到Delete键");
+                return Some("\x1b[3~".to_string()); // ANSI Delete序列
+            }
+            
+            // Ctrl 组合键
+            if i.modifiers.ctrl {
+                if i.key_pressed(egui::Key::C) {
+                    crate::app_log!(debug, "UI", "⚠️ 检测到Ctrl+C");
+                    return Some("\x03".to_string()); // Ctrl+C 中断信号
+                }
+                if i.key_pressed(egui::Key::D) {
+                    crate::app_log!(debug, "UI", "📝 检测到Ctrl+D");
+                    return Some("\x04".to_string()); // Ctrl+D EOF信号
+                }
+                if i.key_pressed(egui::Key::Z) {
+                    crate::app_log!(debug, "UI", "⏸️ 检测到Ctrl+Z");
+                    return Some("\x1a".to_string()); // Ctrl+Z 暂停信号
+                }
+            }
+            
+            None
+        })
+    }
     fn execute_command(&mut self) {
         crate::app_log!(debug, "UI", "🎯 execute_command 被调用，输入缓冲区内容: '{}'", self.input_buffer);
         
-        if !self.input_buffer.trim().is_empty() {
-            let command = self.input_buffer.clone();
-            self.input_buffer.clear();
-            
-            crate::app_log!(info, "UI", "📝 准备执行命令: '{}'", command.trim());
-
-            if command.trim() == "clear" {
-                self.output_buffer.clear();
-                crate::app_log!(info, "UI", "🧹 执行本地clear命令");
-                return;
-            }
-
-            // 🔑 关键修改：移除手动插入命令显示，SSH终端会自动回显
-            // 之前的代码：self.insert_text(format!("{} {}", self.current_prompt, command));
-            // 现在直接发送命令，让SSH服务器处理回显
-
-            if self.is_connected {
-                crate::app_log!(debug, "UI", "🔗 连接状态: 已连接");
-                if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
-                    crate::app_log!(debug, "UI", "📡 SSH管理器和Tab ID都存在，准备发送命令");
-                    // 🔑 关键：直接同步发送命令，无异步回调
+        // 🔑 关键变化：实时字符发送模式下，输入缓冲区可能为空
+        // 因为所有字符都已经实时发送了，这里只需要发送回车符
+        
+        if self.is_connected {
+            if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
+                // 🔑 方案1：如果输入缓冲区不为空，说明是旧模式，发送完整命令
+                if !self.input_buffer.trim().is_empty() {
+                    let command = self.input_buffer.clone();
+                    self.input_buffer.clear();
+                    
+                    crate::app_log!(info, "UI", "📝 旧模式：发送完整命令: '{}'", command.trim());
+                    
+                    if command.trim() == "clear" {
+                        self.output_buffer.clear();
+                        crate::app_log!(info, "UI", "🧹 执行本地clear命令");
+                        return;
+                    }
+                    
                     match ssh_manager.execute_command(tab_id, command.trim()) {
                         Ok(_) => {
                             crate::app_log!(info, "UI", "✅ 命令发送成功: {}", command.trim());
-                            // 输出会在下一帧的read_ssh_output_sync中读取
                         }
                         Err(e) => {
                             crate::app_log!(error, "UI", "❌ 命令发送失败: {}", e);
@@ -431,39 +603,77 @@ impl SimpleTerminalPanel {
                         }
                     }
                 } else {
-                    self.insert_text("错误: SSH连接不存在".to_string());
+                    // 🔑 方案2：输入缓冲区为空，说明是实时模式，只发送回车符
+                    crate::app_log!(info, "UI", "🔄 实时模式：发送回车符");
+                    
+                    match ssh_manager.send_raw(tab_id, "\n") {
+                        Ok(_) => {
+                            crate::app_log!(info, "UI", "✅ 回车符发送成功");
+                        }
+                        Err(e) => {
+                            crate::app_log!(error, "UI", "❌ 回车符发送失败: {}", e);
+                        }
+                    }
                 }
             } else {
-                crate::app_log!(error, "UI", "❌ 连接状态: 未连接");
-                self.insert_text("错误: 未连接到远程主机".to_string());
+                self.insert_text("错误: SSH连接不存在".to_string());
             }
-
-            self.scroll_to_bottom = true;
         } else {
-            crate::app_log!(debug, "UI", "🚫 输入缓冲区为空，不执行任何操作");
+            crate::app_log!(error, "UI", "❌ 连接状态: 未连接");
+            self.insert_text("错误: 未连接到远程主机".to_string());
         }
+        
+        // 清空输入缓冲区（防止遭留）
+        self.input_buffer.clear();
+        self.scroll_to_bottom = true;
     }
     
-    /// 🎯 新增：发送Tab键进行自动补全
-    fn send_tab_completion(&mut self) {
-        if !self.input_buffer.is_empty() && self.is_connected {
-            if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
-                // 🔑 关键：直接使用execute_command发送包含Tab字符的内容
-                // 这样可以利用现有的架构，无需添加新接口
-                let completion_input = format!("{}	", self.input_buffer);
-                match ssh_manager.execute_command(tab_id, &completion_input) {
-                    Ok(_) => {
-                        crate::app_log!(debug, "UI", "🎯 Tab补全发送成功: '{}'", self.input_buffer);
-                        // 注意：不清空输入缓冲区，让用户继续编辑
-                        // 远程终端会返回补全结果，用户可以看到后再决定
-                    }
-                    Err(e) => {
-                        crate::app_log!(error, "UI", "🎯 Tab补全发送失败: {}", e);
+    /// 🎯 新增：发送特殊按键序列（统一的特殊按键处理通道）
+    fn send_special_key(&mut self, key_sequence: &str) {
+        if !self.is_connected {
+            crate::app_log!(warn, "UI", "⚠️ 未连接，无法发送特殊按键");
+            return;
+        }
+        
+        if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
+            match ssh_manager.send_raw(tab_id, key_sequence) {
+                Ok(_) => {
+                    // 根据不同的按键类型记录不同的日志
+                    match key_sequence {
+                        "\t" => crate::app_log!(debug, "UI", "🎯 Tab补全发送成功"),
+                        "\x1b[A" => crate::app_log!(debug, "UI", "⬆️ 上箭头发送成功"),
+                        "\x1b[B" => crate::app_log!(debug, "UI", "⬇️ 下箭头发送成功"),
+                        "\x1b[C" => crate::app_log!(debug, "UI", "➡️ 右箭头发送成功"),
+                        "\x1b[D" => crate::app_log!(debug, "UI", "⬅️ 左箭头发送成功"),
+                        "\x1b[H" => crate::app_log!(debug, "UI", "🏠 Home键发送成功"),
+                        "\x1b[F" => crate::app_log!(debug, "UI", "🏁 End键发送成功"),
+                        "\x1b[5~" => crate::app_log!(debug, "UI", "🔼 PageUp发送成功"),
+                        "\x1b[6~" => crate::app_log!(debug, "UI", "🔽 PageDown发送成功"),
+                        "\x1b[3~" => crate::app_log!(debug, "UI", "🗑️ Delete发送成功"),
+                        "\x03" => crate::app_log!(debug, "UI", "⚠️ Ctrl+C中断信号发送成功"),
+                        "\x04" => crate::app_log!(debug, "UI", "📝 Ctrl+D EOF信号发送成功"),
+                        "\x1a" => crate::app_log!(debug, "UI", "⏸️ Ctrl+Z暂停信号发送成功"),
+                        s if s.starts_with("\x08") => {
+                            let count = s.len();
+                            crate::app_log!(debug, "UI", "⬅️ 退格键发送成功: {} 个", count);
+                        },
+                        s if s.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) => {
+                            // 普通字符（实时输入）
+                            crate::app_log!(debug, "UI", "🔤 实时字符发送成功: {:?}", s);
+                        },
+                        _ => crate::app_log!(debug, "UI", "🔑 特殊按键发送成功: {:?}", key_sequence),
                     }
                 }
+                Err(e) => {
+                    crate::app_log!(error, "UI", "❌ 特殊按键发送失败: {:?}, 错误: {}", key_sequence, e);
+                }
             }
+        } else {
+            crate::app_log!(error, "UI", "❌ SSH管理器或Tab ID不存在，无法发送特殊按键");
         }
     }
+
+
 
     /// 🔑 核心方法：终端内容插入（唯一插入接口）
     fn insert_line(&mut self, line: TerminalLine) {
@@ -495,6 +705,9 @@ impl SimpleTerminalPanel {
 
     /// SSH数据处理入口：VT100解析 + 屏幕状态更新（修复版）
     pub fn process_ssh_data(&mut self, data: String) {
+        // 🔍 打印SSH返回的原文
+        crate::app_log!(info, "SSH_RAW", "📥 SSH原文: {:?}", data);
+        
         // 🔑 关键：VT100解析在这里完成
         let result = self.terminal_emulator.process_pty_output(&data);
         
@@ -514,5 +727,51 @@ impl SimpleTerminalPanel {
         
         self.scroll_to_bottom = true;
         crate::app_log!(debug, "UI", "📺 VT100屏幕状态更新完成: {} 行", self.output_buffer.len());
+    }
+    
+    /// 检测是否在全屏应用模式（如vim、nano等）
+    fn is_in_fullscreen_app(&self, lines: &[TerminalLine]) -> bool {
+        // 🔑 改进的检测逻辑：基于终端内容的特征来判断
+        
+        // 如果行数很少（≤3行），通常不是全屏应用
+        if lines.len() <= 3 {
+            return false;
+        }
+        
+        // 检查是否有明显的全屏应用特征
+        for line in lines {
+            let text = line.text();
+            
+            // 常见的全屏应用特征
+            if text.contains("~") && text.contains("VIM") { // vim界面
+                return true;
+            }
+            if text.contains("GNU nano") { // nano编辑器
+                return true;
+            }
+            if text.contains("File:") && text.contains("Modified") { // 编辑器状态
+                return true;
+            }
+            
+            // 如果有明显的终端提示符，说明不是全屏应用
+            if text.contains("➜") || text.contains("$") || text.contains("#") {
+                return false;
+            }
+        }
+        
+        // 检查最后一行是否像提示符
+        if let Some(last_line) = lines.last() {
+            let last_text = last_line.text();
+            // 如果最后一行包含提示符特征，不是全屏应用
+            if last_text.contains("➜") || 
+               last_text.contains("$") || 
+               last_text.contains("#") ||
+               last_text.starts_with('(') { // conda环境等
+                return false;
+            }
+        }
+        
+        // 默认不是全屏应用
+        false
     }
 }

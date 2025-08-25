@@ -13,8 +13,8 @@ use crate::ui::{AuthType, ConnectionConfig};
 /// 🎭 Actor模式 - SSH消息类型
 #[derive(Debug, Clone)]
 pub enum SshMessage {
-    /// 发送命令到SSH服务器
-    SendCommand(String),
+    /// 🔑 发送原始数据到SSH服务器（统一接口）
+    SendRaw(String),
     /// 读取SSH输出数据
     ReadOutput,
     /// 断开SSH连接
@@ -82,8 +82,8 @@ impl SshActor {
             match self.message_receiver.recv_timeout(Duration::from_millis(10)) {
                 Ok(message) => {
                     match message {
-                        SshMessage::SendCommand(cmd) => {
-                            self.handle_send_command(&cmd);
+                        SshMessage::SendRaw(data) => {
+                            self.handle_send_raw(&data);
                         }
                         SshMessage::ReadOutput => {
                             // 输出在上面的循环中处理
@@ -112,14 +112,14 @@ impl SshActor {
         crate::app_log!(info, "SshActor", "🎭 SSH Actor主循环结束");
     }
     
-    /// 处理发送命令
-    fn handle_send_command(&mut self, command: &str) {
-        match self.connection.send_command(command) {
+    /// 🔑 处理发送原始数据
+    fn handle_send_raw(&mut self, data: &str) {
+        match self.connection.send_raw(data) {
             Ok(_) => {
-                crate::app_log!(debug, "SshActor", "🎭 命令发送成功: {}", command);
+                crate::app_log!(debug, "SshActor", "🎭 数据发送成功: {:?}", data);
             }
             Err(e) => {
-                crate::app_log!(error, "SshActor", "🎭 命令发送失败: {}", e);
+                crate::app_log!(error, "SshActor", "🎭 数据发送失败: {}", e);
             }
         }
     }
@@ -166,13 +166,18 @@ impl SshActorHandle {
         }
     }
     
-    /// 发送命令到SSH Actor
-    pub fn execute_command(&self, command: &str) -> Result<()> {
+    /// 🔑 发送原始数据到SSH Actor（统一接口）
+    pub fn send_raw(&self, data: &str) -> Result<()> {
         self.message_sender
-            .send(SshMessage::SendCommand(command.to_string()))
-            .map_err(|_| anyhow!("命令发送失败：Actor已关闭"))?;
-        crate::app_log!(info, "SshActorHandle", "🚀 命令已提交给Actor: {}", command);
+            .send(SshMessage::SendRaw(data.to_string()))
+            .map_err(|_| anyhow!("数据发送失败：Actor已关闭"))?;
+        crate::app_log!(info, "SshActorHandle", "🚀 数据已提交给Actor: {:?}", data);
         Ok(())
+    }
+    
+    /// 🎯 便捷方法：发送命令（自动添加换行符）
+    pub fn execute_command(&self, command: &str) -> Result<()> {
+        self.send_raw(&format!("{}\n", command))
     }
     
     /// 从 SSH Actor 读取输出
@@ -315,22 +320,35 @@ impl Ssh2Connection {
         Ok(())
     }
 
-    /// 发送命令到SSH服务器
-    pub fn send_command(&mut self, command: &str) -> Result<()> {
+    /// 🔑 发送原始数据到SSH服务器（统一接口，调用层决定发送内容）
+    pub fn send_raw(&mut self, data: &str) -> Result<()> {
         if !self.is_connected {
             return Err(anyhow!("SSH连接未建立"));
         }
 
         if let Some(channel) = &mut self.channel {
-            let command_with_newline = format!("{}\n", command);
-            channel.write_all(command_with_newline.as_bytes())?;
+            channel.write_all(data.as_bytes())?;
             channel.flush()?;
             
-            crate::app_log!(debug, "SSH2", "发送命令: {}", command);
+            // 根据内容类型提供更好的日志
+            if data.ends_with('\n') {
+                let cmd = data.trim_end();
+                crate::app_log!(debug, "SSH2", "发送命令: {}", cmd);
+            } else if data == "\t" {
+                crate::app_log!(debug, "SSH2", "发送Tab补全");
+            } else {
+                crate::app_log!(debug, "SSH2", "发送原始数据: {:?}", data);
+            }
+            
             Ok(())
         } else {
             Err(anyhow!("SSH通道未创建"))
         }
+    }
+    
+    /// 🎯 便捷方法：发送命令（自动添加换行符）
+    pub fn send_command(&mut self, command: &str) -> Result<()> {
+        self.send_raw(&format!("{}\n", command))
     }
 
     /// 读取SSH输出 - 完全非阻塞实现
@@ -613,14 +631,19 @@ impl Ssh2Manager {
         Ok(())
     }
 
-    /// 🔑 执行命令（Actor模式）
-    pub fn execute_command(&self, id: &str, command: &str) -> Result<()> {
+    /// 🔑 发送原始数据（Actor模式，统一接口）
+    pub fn send_raw(&self, id: &str, data: &str) -> Result<()> {
         let connections = self.connections.lock().unwrap();
         if let Some(actor_handle) = connections.get(id) {
-            actor_handle.execute_command(command)
+            actor_handle.send_raw(data)
         } else {
             Err(anyhow!("连接不存在: {}", id))
         }
+    }
+
+    /// 🎯 便捷方法：执行命令（Actor模式）
+    pub fn execute_command(&self, id: &str, command: &str) -> Result<()> {
+        self.send_raw(id, &format!("{}\n", command))
     }
 
     /// 🔑 读取输出（Actor模式）
