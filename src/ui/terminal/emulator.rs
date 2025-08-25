@@ -32,7 +32,7 @@ impl TerminalEmulator {
         // 将数据传给解析器
         self.parser.process(data.as_bytes());
         
-        // 提取内容
+        // 提取内容 - 使用可变引用支持增量式处理
         self.content_extractor.extract_content(&self.parser)
     }
 

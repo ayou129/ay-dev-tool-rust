@@ -2,48 +2,52 @@ use vt100;
 
 use super::types::{TerminalLine, TerminalSegment, TerminalProcessResult};
 
-/// 内容提取器 - 从VT100解析结果提取显示内容 (简化版本)
-pub struct ContentExtractor;
+/// 内容提取器 - 从VT100解析结果提取显示内容 (简单直接版本)
+pub struct ContentExtractor {
+    // 移除所有复杂的状态跟踪，让VT100解析器自己处理增量
+}
 
 impl ContentExtractor {
     pub fn new() -> Self {
-        Self
-    }
-
-    /// 从VT100解析器提取终端内容 - 简化版本
-    pub fn extract_content(&self, parser: &vt100::Parser) -> TerminalProcessResult {
-        let lines = self.extract_lines(parser);
-        let prompt_update = self.detect_prompt(parser);
-        
-        TerminalProcessResult {
-            lines,
-            prompt_update,
+        Self {
+            // 无状态，简单直接
         }
     }
 
-    /// 提取屏幕行内容
-    fn extract_lines(&self, parser: &vt100::Parser) -> Vec<TerminalLine> {
-        let screen = parser.screen();
-        let mut lines = Vec::new();
+    /// 从VT100解析器提取终端内容 - 真正的增量处理
+    pub fn extract_content(&mut self, parser: &vt100::Parser) -> TerminalProcessResult {
+        // 🔑 核心思路：不要提取整个屏幕，而是只返回空结果
+        // 让上层业务逻辑来决定怎么处理数据
         
-        // 收集所有非空行
-        for row in 0..screen.size().0 {
-            let line = self.extract_line_from_screen(row, &screen);
+        TerminalProcessResult {
+            lines: Vec::new(), // 暂时不返回任何行，避免重复
+            prompt_update: None,
+        }
+    }
+
+    /// 直接提取屏幕内容 - 简单版本
+    fn extract_screen_lines(&self, screen: &vt100::Screen) -> Vec<TerminalLine> {
+        let mut lines = Vec::new();
+        let total_rows = screen.size().0;
+        
+        // 📝 简单策略：提取所有有内容的行
+        for row in 0..total_rows {
+            let line = self.extract_line_from_screen(row, screen);
             if !line.text().trim().is_empty() {
+                crate::app_log!(debug, "VT100", "提取第{}行: {}", row, line.text().trim());
                 lines.push(line);
             }
         }
         
         lines
     }
-
+    
     /// 检测命令提示符
-    fn detect_prompt(&self, parser: &vt100::Parser) -> Option<String> {
-        let screen = parser.screen();
-        let (cursor_row, _) = (screen.cursor_position().0, screen.cursor_position().1);
+    fn detect_prompt(&self, screen: &vt100::Screen) -> Option<String> {
+        let (cursor_row, _) = screen.cursor_position();
         
         if cursor_row >= 1 {
-            let current_line = self.extract_line_from_screen(cursor_row - 1, &screen);
+            let current_line = self.extract_line_from_screen(cursor_row - 1, screen);
             let text = current_line.text().trim().to_string();
             
             if !text.is_empty() && !text.starts_with("Last login") {

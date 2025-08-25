@@ -1,4 +1,4 @@
-use crate::ssh::SyncSshManager;
+use crate::ssh::ssh2_client::Ssh2Manager;
 use crate::ui::terminal::{TerminalEmulator, TerminalLine};
 use crate::ui::ConnectionConfig;
 
@@ -7,7 +7,7 @@ use eframe::egui;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-/// 真正简单的终端面板 - 无channel，无异步，直接操作PTY
+/// 真正简单的终端面板 - 直接读取SSH输出
 pub struct SimpleTerminalPanel {
     pub title: String,
     pub connection_info: String,
@@ -15,7 +15,7 @@ pub struct SimpleTerminalPanel {
     input_buffer: String,
     scroll_to_bottom: bool,
     pub is_connected: bool,
-    ssh_manager: Option<Arc<SyncSshManager>>,
+    ssh_manager: Option<Arc<Ssh2Manager>>,
     pub tab_id: Option<String>,
     current_prompt: String,
     terminal_emulator: TerminalEmulator,
@@ -49,35 +49,39 @@ impl SimpleTerminalPanel {
         }
     }
 
-    /// 设置共享的SSH管理器
-    pub fn set_ssh_manager(&mut self, ssh_manager: Arc<SyncSshManager>, tab_id: String) {
-        self.ssh_manager = Some(ssh_manager);
-        self.tab_id = Some(tab_id);
-        crate::app_log!(info, "UI", "设置SSH管理器: {:?}", self.tab_id);
+    /// 设置SSH管理器并启动直接通信
+    pub fn set_ssh_manager(&mut self, ssh_manager: Arc<Ssh2Manager>, tab_id: String) {
+        self.ssh_manager = Some(ssh_manager.clone());
+        self.tab_id = Some(tab_id.clone());
+        crate::app_log!(info, "UI", "设置SSH2管理器: {:?}", self.tab_id);
+        
+        // 🔑 关键改进：直接从SSH2Manager读取，不创建额外的后台任务
+        // SSH2ConnectionWrapper内部已经有独立的读取线程了
+        crate::app_log!(info, "UI", "SSH2管理器设置完成，将直接读取SSH输出");
     }
-
+    
     /// 设置SSH管理器和连接
     pub fn connect(&mut self, tab_id: String, config: &ConnectionConfig) -> anyhow::Result<()> {
-        crate::app_log!(info, "UI", "开始连接SSH: {}", tab_id);
+        crate::app_log!(info, "UI", "开始连接SSH2: {}", tab_id);
         
-        let ssh_manager = Arc::new(SyncSshManager::new());
+        let mut ssh_manager = Ssh2Manager::new();
         ssh_manager.create_connection(tab_id.clone(), config)?;
         
-        self.ssh_manager = Some(ssh_manager);
+        self.ssh_manager = Some(Arc::new(ssh_manager));
         self.tab_id = Some(tab_id);
         self.is_connected = true;
         self.connection_info = format!("{}@{}:{}", config.username, config.host, config.port);
         
-        self.add_output("✅ 连接成功".to_string());
-        crate::app_log!(info, "UI", "SSH连接建立成功");
+        self.add_output("✅ SSH2连接成功".to_string());
+        crate::app_log!(info, "UI", "SSH2连接建立成功");
         
         Ok(())
     }
 
     /// 断开连接
     pub fn disconnect(&mut self) {
-        if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
-            ssh_manager.disconnect(tab_id);
+        if let (Some(_ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
+            crate::app_log!(info, "UI", "请求断开SSH连接: {}", tab_id);
         }
         
         self.ssh_manager = None;
@@ -87,10 +91,10 @@ impl SimpleTerminalPanel {
         self.add_output("连接已断开".to_string());
     }
 
-    /// 🔑 核心方法：真正简单的UI渲染
+    /// 🔑 核心方法：简单的UI渲染测试版本
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        // 🔑 关键：每帧同步读取SSH输出（真正简单的实现）
-        self.read_ssh_output_sync();
+        // 🔑 恢复到单次调用，看看是否还有重复
+        self.receive_ssh_output();
         
         // 设置终端样式
         ui.style_mut().visuals.panel_fill = egui::Color32::WHITE;
@@ -118,31 +122,38 @@ impl SimpleTerminalPanel {
             self.render_input_area(ui);
         });
     }
-
-    /// 🔑 真正简单的SSH输出读取（同步，无异步）
-    fn read_ssh_output_sync(&mut self) {
-        if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
+    
+    /// 🔑 改进：直接从SSH2Manager读取输出
+    fn receive_ssh_output(&mut self) {
+        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
+            // 直接从SSH2Manager读取数据，避免重复读取
             match ssh_manager.read_output(tab_id) {
                 Ok(data) if !data.is_empty() => {
-                    crate::app_log!(info, "UI", "📺 同步读取到SSH输出: {} 字节，内容: {:?}", data.len(), data);
+                    crate::app_log!(debug, "UI", "📢 直接读取SSH输出: {} 字节", data.len());
+                    
+                    // 🔑 关键：检测是否为初始连接输出
+                    if !self.has_ssh_initial_output {
+                        self.has_ssh_initial_output = true;
+                        crate::app_log!(info, "UI", "🎉 收到SSH初始连接输出");
+                    }
                     
                     // 🔑 关键：在显示到UI之前，先记录到日志
                     if data.contains("连接已断开") {
-                        crate::app_log!(error, "UI", "🚨 SSH连接断开，可能是认证失败");
+                        crate::app_log!(error, "UI", "🚨 SSH2连接断开，可能是认证失败");
                         self.is_connected = false;
                         self.connection_info = "连接已断开（可能是认证失败）".to_string();
                     }
                     
-                    // 📺 关键：所有数据都要显示在UI上，无论是成功还是失败信息
+                    // 📢 关键：所有数据都要显示在UI上，无论是成功还是失败信息
                     self.add_pty_output(data);
                 }
                 Ok(_) => {
-                    // 没有数据，正常情况，不记录日志以避免垃圾
+                    // 没有数据，这是正常的
                 }
                 Err(e) => {
-                    crate::app_log!(warn, "UI", "SSH输出读取错误: {}", e);
-                    // 🔑 错误信息也要显示在UI上
-                    self.add_output(format!("错误: {}", e));
+                    if !e.to_string().contains("连接不存在") {
+                        crate::app_log!(debug, "UI", "SSH读取错误: {}", e);
+                    }
                 }
             }
         }
@@ -282,24 +293,14 @@ impl SimpleTerminalPanel {
         self.scroll_to_bottom = true;
     }
 
-    /// 添加PTY输出（带VT100解析）
+    /// 添加PTY输出（临时简化版本 - 直接显示原始数据）
     pub fn add_pty_output(&mut self, data: String) {
-        // 使用VT100解析器处理数据
-        let result = self.terminal_emulator.process_pty_output(&data);
+        // 📝 临时简化：直接显示原始SSH数据，不经过VT100解析
+        crate::app_log!(debug, "UI", "📝 直接显示原始数据: {} 字节", data.len());
         
-        // 添加处理后的行到输出缓冲区
-        for line in result.lines {
-            self.output_buffer.push_back(line);
-        }
-        
-        // 更新提示符
-        if let Some(prompt) = result.prompt_update {
-            self.current_prompt = prompt;
-        }
-        
-        // 限制缓冲区大小
-        while self.output_buffer.len() > 1000 {
-            self.output_buffer.pop_front();
+        // 简单地将数据作为一行显示
+        if !data.trim().is_empty() {
+            self.add_output(format!("[RAW] {}", data.replace('\r', "\\r").replace('\n', "\\n")));
         }
         
         self.scroll_to_bottom = true;

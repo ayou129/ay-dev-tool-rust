@@ -4,7 +4,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
-use crate::ssh::SyncSshManager;
+use crate::ssh::Ssh2Manager;
 use crate::ui::{ConnectionConfig, ConnectionManager, PluginsPanel, SimpleTerminalPanel};
 
 /// Tab系统的核心trait - Strategy Pattern
@@ -140,7 +140,7 @@ impl TerminalTab {
         let terminal = SimpleTerminalPanel::new(title.clone(), connection_info);
         
         // 这里暂时不直接连接，而是在show()方法中处理连接
-        // 因为SimpleTerminalPanel需要SyncSshManager才能连接
+        // 因为SimpleTerminalPanel需要Ssh2Manager才能连接
 
         Self {
             id,
@@ -226,7 +226,7 @@ pub struct TabManager {
     active_tab_id: Option<String>,
     observers: Vec<Box<dyn TabObserver>>,
     context: TabContext,
-    ssh_manager: Arc<SyncSshManager>, // 新增：SSH管理器
+    ssh_manager: Arc<Ssh2Manager>, // SSH2管理器
 }
 
 impl TabManager {
@@ -238,7 +238,7 @@ impl TabManager {
         let welcome_id = welcome_tab.get_id();
         tabs.insert(welcome_id.clone(), welcome_tab);
 
-        let ssh_manager = Arc::new(SyncSshManager::new());
+        let ssh_manager = Arc::new(Ssh2Manager::new());
         
         Self {
             tabs,

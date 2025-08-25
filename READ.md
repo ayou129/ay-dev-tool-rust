@@ -353,7 +353,6 @@ Last login: Mon Aug 18 04:29:55 2025
 iterm2 的 展示结果为：
 Last login: Mon Aug 18 16:04:06 from 192.168.3.227
 (base) ➜  ~
-
 (base) ➜  ~ pwd
 /Users/liguoxin
 (base) ➜  ~ pwd
