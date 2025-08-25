@@ -70,7 +70,7 @@ pub struct TerminalEmulator {
 impl TerminalEmulator {
     pub fn new(width: u16, height: u16) -> Self {
         Self {
-            parser: vt100::Parser::new(height, width, 0),
+            parser: vt100::Parser::new(height, width, 1000), // height, width, scrollback
             _width: width,
             _height: height,
         }
@@ -440,28 +440,49 @@ impl TerminalEmulator {
 
         // 获取VT100屏幕引用（已在上方获取）
 
-        // 🔥 调试：打印所有屏幕行内容
+        // 🔥 最简策略：完全信任VT100，显示所有屏幕内容
         crate::app_log!(debug, "VT100", "=== 开始提取屏幕内容 ===");
+        
+        let cursor_row = self.cursor_position().0;
+        crate::app_log!(debug, "VT100", "光标位置: 第{}行", cursor_row + 1);
+        
+        // 🔥 基于光标位置的智能显示策略
+        // 分析：pwd命令后，光标在第7行，我们需要显示相关的上下文
+        
+        // 先收集所有非空行
+        let mut all_content_lines = Vec::new();
         for row in 0..screen.size().0 {
             let line = self.extract_line_from_screen(row, &screen);
             let line_text = line.text();
-            
-            if !line_text.trim().is_empty() {
-                crate::app_log!(debug, "VT100", "第{}行: '{}'", row + 1, line_text);
-            }
-
-            // 终端逻辑：跳过填充行
-            if self.is_padding_line(&line) {
-                continue;
-            }
-
-            // 不再跳过包含提示符的行，允许将提示符行渲染出来，便于在UI中内嵌输入
-
-            // 只保留有意义的非提示符行
-            if !line.is_empty() {
-                lines.push(line);
+            if !line_text.trim().is_empty() && !self.is_padding_line(&line) {
+                all_content_lines.push((row, line, line_text));
             }
         }
+        
+        // 找到光标位置附近的相关内容
+        let cursor_row = self.cursor_position().0;
+        
+        // 策略：显示从最后一个"命令开始"到光标位置的内容
+        let mut display_start_idx = 0;
+        
+        // 从后往前找，找到最后一个包含命令的行作为起始点
+        for i in (0..all_content_lines.len()).rev() {
+            let (row, _, text) = &all_content_lines[i];
+            // 如果这行包含命令（提示符+命令），且不是纯提示符
+            if text.contains("➜") && text.len() > 15 && !text.ends_with("~") {
+                display_start_idx = i;
+                crate::app_log!(debug, "VT100", "找到命令起始行第{}行: '{}'", row + 1, text);
+                break;
+            }
+        }
+        
+        // 显示从命令开始到现在的所有内容
+        for i in display_start_idx..all_content_lines.len() {
+            let (row, line, text) = &all_content_lines[i];
+            crate::app_log!(debug, "VT100", "显示第{}行: '{}'", row + 1, text);
+            lines.push(line.clone());
+        }
+        
         crate::app_log!(debug, "VT100", "=== 屏幕内容提取完成，共{}行 ===", lines.len());
 
         // 🔥 修复：返回所有屏幕行，让UI决定如何显示

@@ -271,8 +271,8 @@ impl TerminalApp {
 
             // 先尝试连接
             self.runtime.spawn(async move {
-                    // 直接调用连接方法，无需锁
-                    let connect_result = ssh_manager.connect(tab_id.clone(), &config).await;
+                    // 使用新的消息传递架构创建连接
+                    let connect_result = ssh_manager.create_connection(tab_id.clone(), &config, command_sender.clone().unwrap()).await;
 
                     match connect_result {
                         Ok(_) => {
@@ -292,7 +292,7 @@ impl TerminalApp {
 
                             // 直接获取初始输出，无需锁
                             crate::app_log!(info, "SSH", "开始调用get_shell_initial_output");
-                            let initial_output_result = ssh_manager.get_shell_initial_output(&tab_id).await;
+                            let initial_output_result = ssh_manager.get_shell_initial_output(&tab_id, command_sender.clone()).await;
 
                             match initial_output_result {
                                 Ok(initial_output) => {

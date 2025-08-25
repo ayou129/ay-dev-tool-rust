@@ -1,8 +1,18 @@
 
 ## 项目介绍
 
-当前的APP是一个类似 warp 的 跨平台(Windows/Macos)的桌面应用，核心是一个终端工具，主要面向的是开发者。
-核心功能除了终端的基本功能之外(同步用户配置功能(该功能后期添加))，还额外提供一些插件:
+当前的APP是一个类似 warp、finalShell、iterm2(macos) 的 跨平台(Windows/Macos)的桌面应用，核心是一个终端工具，主要面向的是开发者。
+
+主要功能如下：
+
+1. 核心：SSH终端连接 + 多标签管理 + 配置存储
+2. 插件：系统监控(CPU/内存) + 文件浏览 + 软件检测
+3. 技术栈：Rust + egui + portable-pty + tokio
+  - egui/eframe 统一实现UI，包括终端显示和性能监控
+  - portable-pty 实现终端连接
+  - tokio 实现异步
+
+详细功能如下：
 
 - 核心功能
   - 基础 ssh 功能
@@ -54,14 +64,12 @@
 
 ### 核心技术栈
 
-框架选择： Rust + Ratatui
-🛠️ 核心技术栈
-
 1. UI 层
-    - UI 层：Ratatui + unicode-width 处理中文字符，eframe/egui 实现性能监控（折线图）和软件列表（表格）。
-    - 使用线程（std::thread 或 tokio）管理 Ratatui 和 egui 窗口。
+   - egui/eframe - 跨平台GUI框架，统一实现终端显示和监控面板
+   - 字符网格渲染 - 参考iTerm2实现终端文本显示
+   - VT100解析 - 处理ANSI转义序列和颜色
 2. 网络/SSH 层
-   - tokio - 异步运行时（SSH 连接、命令执行）。
+   - tokio - 轻量异步支持
    - SSH + PTY - SSH 连接（密码/公钥）。
    - tokio-util - 异步数据流处理。
    - 错误处理：支持断线重连（3 次重试），处理连接失败/超时。
@@ -114,12 +122,14 @@
       - 字符网格方案 参考 iTerm2 的实现
       - 自然选择功能，例如 鼠标拖动可以选择段落，Ctrl+A 全选，Ctrl+C 复制
     - 底层实现
+      - app 可以有多个 tab，每个tab包含一个终端，简化的同步调用，避免复杂的消息传递架构
       - SSH + PTY 连接、断开、接收等命令 都是需要按照 SSH + PTY 的官方推荐的书写方案去实现 参考 doc/pyt-lib.rs 以及 <https://docs.rs/portable-pty/latest/portable_pty/>
       - SSH + PTY 发送过来的消息
+        0. 在UI主循环中同步读取PTY数据，避免阻塞主线程
         1. 打印一次完整内容
         2. 将完整内容(实际内容和ANSI转义序列)交给VT100 去解析，配合各个组件实现功能
-          - 要 适配 VT100 所有的 解析 功能(方法)，参考 doc/screen.rs 的实现
-          - 包括 反显、清屏、光标移动、标题、图标、内容、光标位置，样式等
+        - 要 适配 VT100 所有的 解析 功能(方法)，参考 doc/screen.rs 的实现
+        - 包括 反显、清屏、光标移动、标题、图标、内容、光标位置，样式等
         - 相关文档： <https://www2.ccs.neu.edu/research/gpc/VonaUtils/vona/terminal/vtansi.htm>
 
 ~~~doc
@@ -163,3 +173,4 @@ cargo run
 # 格式化所有文件
 cargo fmt
 ~~~
+

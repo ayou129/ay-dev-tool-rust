@@ -76,7 +76,7 @@ impl Clone for TerminalPanel {
             command_sender: Some(sender),
             current_prompt: self.current_prompt.clone(),
             ssh_command_executor: None, // 克隆时不复制函数
-            terminal_emulator: TerminalEmulator::new(200, 50), // 创建新的终端模拟器
+            terminal_emulator: TerminalEmulator::new(120, 30), // 创建新的终端模拟器 (width=120, height=30)
             has_ssh_initial_output: false, // 初始化为未收到SSH输出
             inline_input_active: false,
             cursor_blink_time: 0.0,
@@ -103,7 +103,7 @@ impl TerminalPanel {
             command_sender: Some(sender),
             current_prompt: "❯".to_string(), // 默认提示符
             ssh_command_executor: None,      // 初始化时为空，稍后设置
-            terminal_emulator: TerminalEmulator::new(200, 50), // 创建终端模拟器
+            terminal_emulator: TerminalEmulator::new(120, 30), // 创建终端模拟器 (width=120, height=30)
             has_ssh_initial_output: false,   // 初始化为未收到SSH输出
             inline_input_active: false,
             cursor_blink_time: 0.0,
@@ -713,17 +713,23 @@ impl TerminalPanel {
             // 特殊处理连接相关的命令
             match result.command.as_str() {
                 "connect_success" => {
-                    // 连接成功，设置连接状态并显示欢迎信息
+                    // 连接成功，设置连接状态
                     self.is_connected = true;
                     if let Ok(output) = result.output {
-                        self.add_output(output);
+                        // 只处理非空的输出，避免显示内部状态消息
+                        if !output.trim().is_empty() {
+                            self.add_output(output);
+                        }
                     }
                 }
                 "initial_output" => {
                     // 处理初始shell输出（欢迎信息和提示符） - 使用VT100解析
                     if let Ok(output) = result.output {
-                        // 使用专门的PTY输出处理方法，会进行VT100解析和提示符提取
-                        self.add_pty_output(output);
+                        // 只处理非空的输出，避免显示内部状态消息
+                        if !output.trim().is_empty() {
+                            // 使用专门的PTY输出处理方法，会进行VT100解析和提示符提取
+                            self.add_pty_output(output);
+                        }
                     }
                 }
                 "connect_failed" => {
@@ -749,6 +755,19 @@ impl TerminalPanel {
                     }
                 }
 
+                "pty_stream" => {
+                    // 🔥 实时PTY数据流处理 - 直接进行VT100解析
+                    match result.output {
+                        Ok(output) => {
+                            crate::app_log!(info, "UI", "收到PTY流数据，进行VT100解析: {} 字节", output.len());
+                            self.add_pty_output(output);
+                        }
+                        Err(error) => {
+                            crate::app_log!(warn, "UI", "PTY流数据错误: {}", error);
+                            self.add_pty_output(error);
+                        }
+                    }
+                }
                 _ => {
                     // 普通PTY命令处理 - 使用VT100解析
                     // 注意：命令已在execute_command中显示，这里只显示结果
@@ -827,17 +846,18 @@ impl TerminalPanel {
 
     // 断开连接
     pub fn disconnect(&mut self) {
-        let mut should_disconnect = false;
-
-        if let (Some(_ssh_manager), Some(_tab_id)) = (&self.ssh_manager, &self.tab_id) {
-            // 断开连接逻辑由异步任务处理，这里只更新UI状态
-            should_disconnect = true;
-        }
-
-        if should_disconnect {
+        if let (Some(ssh_manager), Some(tab_id)) = (&self.ssh_manager, &self.tab_id) {
+            // 使用 tokio spawn 来执行异步断开连接
+            let ssh_manager = ssh_manager.clone();
+            let tab_id = tab_id.clone();
+            tokio::spawn(async move {
+                ssh_manager.disconnect(&tab_id).await;
+            });
+            
+            // 清理本地状态
+            self.ssh_manager = None;
+            self.tab_id = None;
             self.is_connected = false;
-            self.tab_id = None; // 清除tab_id，回到快速连接界面
-            self.ssh_manager = None; // 清除SSH管理器
             self.add_output("连接已断开".to_string());
         }
     }
