@@ -1,13 +1,15 @@
 pub mod connection_manager;
 pub mod plugins_panel;
 pub mod terminal_emulator;
-pub mod terminal_panel;
+pub mod simple_terminal;
+pub mod tab_system;
 
 use serde::{Deserialize, Serialize};
 
 pub use connection_manager::ConnectionManager;
 pub use plugins_panel::PluginsPanel;
-pub use terminal_panel::TerminalPanel;
+pub use simple_terminal::SimpleTerminalPanel;
+pub use tab_system::{TabManager, TabEvent, TabObserver};
 
 // SSH 连接配置
 #[derive(Debug, Clone, Serialize, Deserialize)]

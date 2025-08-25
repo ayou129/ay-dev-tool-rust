@@ -62,28 +62,46 @@
 
 ## 项目实现框架
 
-### 核心技术栈
+### 文件结构
 
-1. UI 层
-   - egui/eframe - 跨平台GUI框架，统一实现终端显示和监控面板
-   - 字符网格渲染 - 参考iTerm2实现终端文本显示
-   - VT100解析 - 处理ANSI转义序列和颜色
-2. 网络/SSH 层
-   - tokio - 轻量异步支持
-   - SSH + PTY - SSH 连接（密码/公钥）。
-   - tokio-util - 异步数据流处理。
-   - 错误处理：支持断线重连（3 次重试），处理连接失败/超时。
-3. 系统监控层
-   - sysinfo - 获取 CPU/内存/磁盘/网速。
-   - tokio::time - 定时刷新（1s/5s）。
-   - 可选：pnet 增强网速监控。
-4. 数据处理层
-   - serde + serde_json - JSON 配置（终端列表：name, host, port, auth, remark）。
-   - dirs - 用户目录（如 ~/.config/dev-tool）。
-   - uuid - 会话 ID。
-5. 跨平台
-   - std::env::consts::OS 适配本地命令（brew vs. winget）。
-   - Windows 支持 WSL 检测。
+#### 📁 应用层 (src/app/)
+- **mod.rs** - 应用模块入口，导出SimpleTerminalApp和TabBasedApp
+- **simple.rs** - 原始简单应用实现（已废弃，保留用于兼容）
+- **tab_app.rs** - 基于Tab系统的主应用，使用设计模式实现
+
+#### 📁 配置层 (src/config/)
+- **mod.rs** - 配置管理模块，处理应用配置的加载、保存和默认值
+
+#### 📁 插件层 (src/plugins/)
+- **mod.rs** - 插件系统入口
+- **file_browser.rs** - 文件浏览器插件
+- **software_detector.rs** - 软件检测插件
+- **system_monitor.rs** - 系统监控插件（CPU、内存、磁盘、网络）
+
+#### 📁 SSH/网络层 (src/ssh/)
+- **mod.rs** - SSH模块入口，导出同步SSH实现
+- **sync.rs** - 完全同步的SSH连接实现，使用内部可变性和Arc<Mutex<>>
+
+#### 📁 UI层 (src/ui/)
+- **mod.rs** - UI模块入口，导出所有UI组件和配置类型
+- **connection_manager.rs** - 连接管理器，处理SSH连接配置的增删改查
+- **plugins_panel.rs** - 插件面板，展示系统监控信息
+- **simple_terminal.rs** - 简化的终端面板，直接同步操作PTY
+- **tab_system.rs** - Tab系统核心，使用Strategy+Factory+Observer设计模式
+- **terminal_emulator.rs** - 终端模拟器，处理VT100/ANSI转义序列
+
+#### 📁 工具层 (src/utils/)
+- **mod.rs** - 工具模块入口
+- **logger.rs** - 全局日志系统，支持文件日志和控制台日志
+
+#### 🎯 入口文件
+- **main.rs** - 应用程序入口，初始化GUI和启动Tab应用
+
+#### 🏗️ 架构特点
+1. **设计模式驱动** - Tab系统使用Strategy、Factory、Observer模式
+2. **同步PTY操作** - 移除复杂异步通道，UI直接读写PTY
+3. **内部可变性** - SSH管理器使用Arc<Mutex<>>实现线程安全
+4. **模块化设计** - 每个模块职责单一，易于维护和扩展
 
 ### 实现之前的要求
 

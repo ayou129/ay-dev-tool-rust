@@ -443,7 +443,7 @@ impl TerminalEmulator {
         // 🔥 最简策略：完全信任VT100，显示所有屏幕内容
         crate::app_log!(debug, "VT100", "=== 开始提取屏幕内容 ===");
         
-        let cursor_row = self.cursor_position().0;
+        let _cursor_row = self.cursor_position().0;
         crate::app_log!(debug, "VT100", "光标位置: 第{}行", cursor_row + 1);
         
         // 🔥 基于光标位置的智能显示策略
@@ -460,7 +460,7 @@ impl TerminalEmulator {
         }
         
         // 找到光标位置附近的相关内容
-        let cursor_row = self.cursor_position().0;
+        let _cursor_row = self.cursor_position().0;
         
         // 策略：显示从最后一个"命令开始"到光标位置的内容
         let mut display_start_idx = 0;

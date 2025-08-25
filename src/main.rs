@@ -137,8 +137,8 @@ fn main() -> eframe::Result<()> {
             // 启用浅色主题（白底黑字，类似 iTerm2 明亮主题）
             cc.egui_ctx.set_visuals(egui::Visuals::light());
 
-            // 创建应用实例
-            Ok(Box::new(app::TerminalApp::new(cc)))
+            // 创建基于Tab系统的应用实例
+            Ok(app::TabAppFactory::create_app(cc))
         }),
     )
 }
