@@ -72,7 +72,7 @@ impl SimpleTerminalPanel {
         self.is_connected = true;
         self.connection_info = format!("{}@{}:{}", config.username, config.host, config.port);
         
-        self.add_output("✅ SSH2连接成功".to_string());
+        self.insert_text("✅ SSH2连接成功".to_string());
         crate::app_log!(info, "UI", "SSH2连接建立成功");
         
         Ok(())
@@ -88,7 +88,7 @@ impl SimpleTerminalPanel {
         self.tab_id = None;
         self.is_connected = false;
         self.connection_info = "未连接".to_string();
-        self.add_output("连接已断开".to_string());
+        self.insert_text("连接已断开".to_string());
     }
 
     /// 🔑 核心方法：简单的UI渲染测试版本
@@ -145,7 +145,7 @@ impl SimpleTerminalPanel {
                     }
                     
                     // 📢 关键：所有数据都要显示在UI上，无论是成功还是失败信息
-                    self.add_pty_output(data);
+                    self.process_ssh_data(data);
                 }
                 Ok(_) => {
                     // 没有数据，这是正常的
@@ -244,7 +244,7 @@ impl SimpleTerminalPanel {
             }
 
             // 显示用户输入
-            self.add_output(format!("{} {}", self.current_prompt, command));
+            self.insert_text(format!("{} {}", self.current_prompt, command));
 
             if self.is_connected {
                 if let (Some(ssh_manager), Some(tab_id)) = (&mut self.ssh_manager, &self.tab_id) {
@@ -255,23 +255,34 @@ impl SimpleTerminalPanel {
                             // 输出会在下一帧的read_ssh_output_sync中读取
                         }
                         Err(e) => {
-                            self.add_output(format!("命令执行失败: {}", e));
+                            self.insert_text(format!("命令执行失败: {}", e));
                         }
                     }
                 } else {
-                    self.add_output("错误: SSH连接不存在".to_string());
+                    self.insert_text("错误: SSH连接不存在".to_string());
                 }
             } else {
-                self.add_output("错误: 未连接到远程主机".to_string());
+                self.insert_text("错误: 未连接到远程主机".to_string());
             }
 
             self.scroll_to_bottom = true;
         }
     }
 
-    /// 添加输出到终端
-    fn add_output(&mut self, text: String) {
-        // 简单创建TerminalLine
+    /// 🔑 核心方法：终端内容插入（唯一插入接口）
+    fn insert_line(&mut self, line: TerminalLine) {
+        self.output_buffer.push_back(line);
+        
+        // 限制缓冲区大小
+        while self.output_buffer.len() > 1000 {
+            self.output_buffer.pop_front();
+        }
+        
+        self.scroll_to_bottom = true;
+    }
+    
+    /// 手动插入文本（不经过VT100）
+    fn insert_text(&mut self, text: String) {
         let mut line = TerminalLine::new();
         line.segments.push(crate::ui::terminal::TerminalSegment {
             text,
@@ -283,26 +294,27 @@ impl SimpleTerminalPanel {
             inverse: false,
         });
         
-        self.output_buffer.push_back(line);
-        
-        // 限制缓冲区大小
-        while self.output_buffer.len() > 1000 {
-            self.output_buffer.pop_front();
-        }
-        
-        self.scroll_to_bottom = true;
+        self.insert_line(line);
     }
 
-    /// 添加PTY输出（临时简化版本 - 直接显示原始数据）
-    pub fn add_pty_output(&mut self, data: String) {
-        // 📝 临时简化：直接显示原始SSH数据，不经过VT100解析
-        crate::app_log!(debug, "UI", "📝 直接显示原始数据: {} 字节", data.len());
+    /// SSH数据处理入口：VT100解析 + 内容插入
+    pub fn process_ssh_data(&mut self, data: String) {
+        // 🔑 关键：VT100解析在这里完成
+        let result = self.terminal_emulator.process_pty_output(&data);
         
-        // 简单地将数据作为一行显示
-        if !data.trim().is_empty() {
-            self.add_output(format!("[RAW] {}", data.replace('\r', "\\r").replace('\n', "\\n")));
+        // VT100解析器返回什么就插入什么
+        for line in result.lines {
+            if !line.is_empty() {
+                crate::app_log!(debug, "UI", "📝 插入VT100解析后的行: {}", line.text().trim());
+                self.insert_line(line);
+            }
         }
         
-        self.scroll_to_bottom = true;
+        // 更新提示符
+        if let Some(prompt) = result.prompt_update {
+            if !prompt.trim().is_empty() {
+                self.current_prompt = prompt.trim().to_string();
+            }
+        }
     }
 }

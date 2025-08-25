@@ -460,7 +460,7 @@ impl TabManager {
                 // 将初始输出传递给终端Tab
                 if let Some(terminal_tab) = self.tabs.get_mut(tab_id) {
                     if let Some(term_tab) = terminal_tab.as_any_mut().downcast_mut::<TerminalTab>() {
-                        term_tab.terminal.add_pty_output(data);
+                        term_tab.terminal.process_ssh_data(data);
                     }
                 }
             }

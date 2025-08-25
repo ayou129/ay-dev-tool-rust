@@ -2,42 +2,66 @@ use vt100;
 
 use super::types::{TerminalLine, TerminalSegment, TerminalProcessResult};
 
-/// 内容提取器 - 从VT100解析结果提取显示内容 (简单直接版本)
+/// 内容提取器 - 从VT100解析结果提取显示内容 (增量式处理)
 pub struct ContentExtractor {
-    // 移除所有复杂的状态跟踪，让VT100解析器自己处理增量
+    /// 记录上次处理的最大行数
+    last_max_row: u16,
 }
 
 impl ContentExtractor {
     pub fn new() -> Self {
         Self {
-            // 无状态，简单直接
+            last_max_row: 0,
         }
     }
 
-    /// 从VT100解析器提取终端内容 - 真正的增量处理
+    /// 从VT100解析器提取终端内容 - 增量式处理
     pub fn extract_content(&mut self, parser: &vt100::Parser) -> TerminalProcessResult {
-        // 🔑 核心思路：不要提取整个屏幕，而是只返回空结果
-        // 让上层业务逻辑来决定怎么处理数据
+        let screen = parser.screen();
+        
+        // 🔑 关键：只提取新增的内容和当前光标附近的行
+        let lines = self.extract_new_content(&screen);
+        let prompt_update = self.detect_prompt(&screen);
         
         TerminalProcessResult {
-            lines: Vec::new(), // 暂时不返回任何行，避免重复
-            prompt_update: None,
+            lines,
+            prompt_update,
         }
     }
 
-    /// 直接提取屏幕内容 - 简单版本
-    fn extract_screen_lines(&self, screen: &vt100::Screen) -> Vec<TerminalLine> {
+    /// 提取新内容 - 只提取增量部分
+    fn extract_new_content(&mut self, screen: &vt100::Screen) -> Vec<TerminalLine> {
         let mut lines = Vec::new();
         let total_rows = screen.size().0;
+        let cursor_row = screen.cursor_position().0;
         
-        // 📝 简单策略：提取所有有内容的行
+        // 找到最后一个有内容的行
+        let mut max_content_row = 0;
         for row in 0..total_rows {
+            let line = self.extract_line_from_screen(row, screen);
+            if !line.text().trim().is_empty() {
+                max_content_row = row;
+            }
+        }
+        
+        // 🔑 关键策略：只提取从上次最大行到当前最大行的内容
+        let start_row = if max_content_row > self.last_max_row {
+            self.last_max_row
+        } else {
+            // 如果没有新内容，只提取光标所在行
+            if cursor_row > 0 { cursor_row - 1 } else { 0 }
+        };
+        
+        for row in start_row..=max_content_row {
             let line = self.extract_line_from_screen(row, screen);
             if !line.text().trim().is_empty() {
                 crate::app_log!(debug, "VT100", "提取第{}行: {}", row, line.text().trim());
                 lines.push(line);
             }
         }
+        
+        // 更新状态
+        self.last_max_row = max_content_row;
         
         lines
     }
